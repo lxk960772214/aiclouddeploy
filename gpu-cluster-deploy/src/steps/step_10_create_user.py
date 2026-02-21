@@ -1,0 +1,94 @@
+"""
+步骤10: 创建ubuntu用户
+"""
+
+from typing import List
+from src.steps.base import BaseStep, StepResult, StepStatus
+
+
+class CreateUser(BaseStep):
+    """创建ubuntu用户"""
+
+    step_id = "10"
+    step_name = "创建ubuntu用户"
+    step_description = "创建ubuntu用户（uid 1001, gid 1001），配置免密sudo"
+    requires_sudo = True
+    supports_batch = True
+
+    def execute(self, hosts: List[str]) -> StepResult:
+        """执行用户创建"""
+        results = {}
+
+        # 1. 检查用户是否已存在
+        check_cmd = "id ubuntu 2>/dev/null && echo 'exists' || echo 'not_exists'"
+        check_result = self.execute_batch(hosts, check_cmd, sudo=False)
+
+        need_create = []
+        already_exists = []
+
+        for host, res in check_result.results.items():
+            if res.success and "exists" in res.stdout:
+                already_exists.append(host)
+            else:
+                need_create.append(host)
+
+        self.logger.info(f"需要创建用户的节点: {len(need_create)}，已存在: {len(already_exists)}")
+
+        if need_create:
+            # 2. 创建用户组
+            group_cmd = "groupadd -g 1001 ubuntu 2>/dev/null || true"
+            self.execute_batch(need_create, group_cmd, sudo=True)
+
+            # 3. 创建用户
+            user_cmd = "useradd -u 1001 -g 1001 -m -s /bin/bash ubuntu"
+            user_result = self.execute_batch(need_create, user_cmd, sudo=True)
+
+            for host, res in user_result.results.items():
+                if not res.success:
+                    results[host] = {"success": False, "error": f"创建用户失败: {res.stderr}"}
+
+            # 4. 设置免密sudo
+            sudo_cmd = "echo 'ubuntu ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/ubuntu && chmod 440 /etc/sudoers.d/ubuntu"
+            self.execute_batch(need_create, sudo_cmd, sudo=True)
+
+            # 5. 创建.ssh目录
+            ssh_dir_cmd = "mkdir -p /home/ubuntu/.ssh && chown ubuntu:ubuntu /home/ubuntu/.ssh && chmod 700 /home/ubuntu/.ssh"
+            self.execute_batch(need_create, ssh_dir_cmd, sudo=True)
+
+        # 验证
+        verify_cmd = "id ubuntu"
+        verify_result = self.execute_batch(hosts, verify_cmd, sudo=False)
+
+        success_hosts = []
+        failed_hosts = []
+
+        for host, res in verify_result.results.items():
+            if res.success:
+                success_hosts.append(host)
+                results[host] = {"success": True}
+            else:
+                failed_hosts.append(host)
+                results[host] = {"success": False, "error": "验证失败"}
+
+        if failed_hosts:
+            return StepResult(
+                step_id=self.step_id,
+                step_name=self.step_name,
+                status=StepStatus.FAILED,
+                message=f"用户创建失败: {failed_hosts}",
+                host_results=results
+            )
+
+        return StepResult(
+            step_id=self.step_id,
+            step_name=self.step_name,
+            status=StepStatus.SUCCESS,
+            message=f"ubuntu用户配置完成，成功: {len(success_hosts)}/{len(hosts)}",
+            host_results=results
+        )
+
+    def post_check(self, hosts: List[str]) -> bool:
+        """验证用户创建"""
+        cmd = "id ubuntu && sudo -u ubuntu sudo -n true"
+        result = self.execute_batch(hosts, cmd, sudo=False)
+        return all(r.success for r in result.results.values())

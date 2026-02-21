@@ -1,0 +1,144 @@
+{
+  "taskId": "task-20260221-051724",
+  "name": "GPU集群环境部署程序",
+  "type": "cluster-deploy",
+  "mode": 1,
+  "description": "开发一个GPU集群环境部署的自动化程序，支持跳转服务器架构、批量操作、34个标准化部署步骤",
+  "createdAt": "2026-02-21T05:17:24Z",
+  "updatedAt": "2026-02-21T13:30:00Z",
+  "status": "completed",
+  "progress": {
+    "currentPhase": 3,
+    "totalPhases": 3,
+    "completedSteps": 16,
+    "totalSteps": 16
+  },
+  "environment": {
+    "cuda_version": "12.8",
+    "nvidia_driver_version": "590.48.01",
+    "kernel_mode": "keep",
+    "mlnx_ofed_version": "24.10-2.1.8.0"
+  },
+  "parameters": {
+    "jumphost": {
+      "description": "跳转服务器配置",
+      "required": true,
+      "fields": [
+        {"name": "host", "type": "string", "description": "跳转服务器公网IP"},
+        {"name": "port", "type": "integer", "default": 22, "description": "SSH端口"},
+        {"name": "auth_type", "type": "enum", "options": ["key", "password"], "description": "认证方式"},
+        {"name": "username", "type": "string", "default": "ubuntu", "description": "登录用户名"},
+        {"name": "private_key", "type": "string", "description": "私钥路径（key认证时）"},
+        {"name": "password", "type": "string", "description": "密码（password认证时）"}
+      ]
+    },
+    "nodes": {
+      "description": "集群节点列表",
+      "required": true,
+      "fields": [
+        {"name": "hostname", "type": "string", "description": "主机名"},
+        {"name": "ip", "type": "string", "description": "内网IP"},
+        {"name": "roles", "type": "array", "description": "节点角色: nfs_server, time_server, gpu_node"},
+        {"name": "storage_type", "type": "enum", "options": ["single", "raid1", "raid10"], "description": "存储类型"},
+        {"name": "storage_devices", "type": "array", "description": "存储设备列表"}
+      ]
+    },
+    "nfs": {
+      "description": "NFS配置",
+      "required": false,
+      "fields": [
+        {"name": "enabled", "type": "boolean", "default": true},
+        {"name": "export_path", "type": "string", "default": "/ssd/nfs"},
+        {"name": "client_mount", "type": "string", "default": "/data"}
+      ]
+    },
+    "kernel": {
+      "description": "内核配置",
+      "required": false,
+      "fields": [
+        {"name": "mode", "type": "enum", "options": ["keep", "specify"], "default": "keep"},
+        {"name": "version", "type": "string", "description": "指定版本（mode=specify时）"},
+        {"name": "local_debs", "type": "string", "description": "本地deb包目录（可选）"}
+      ]
+    }
+  },
+  "phases": [
+    {
+      "id": 1,
+      "name": "项目骨架搭建",
+      "description": "创建项目结构、核心模块实现",
+      "status": "completed",
+      "steps": [
+        {"id": "1.1", "name": "创建项目目录结构", "status": "completed"},
+        {"id": "1.2", "name": "实现配置加载器", "status": "completed"},
+        {"id": "1.3", "name": "实现SSH连接管理器", "status": "completed"},
+        {"id": "1.4", "name": "实现批量执行器", "status": "completed"},
+        {"id": "1.5", "name": "实现日志系统", "status": "completed"}
+      ]
+    },
+    {
+      "id": 2,
+      "name": "部署步骤实现",
+      "description": "实现34个标准化部署步骤",
+      "status": "completed",
+      "steps": [
+        {"id": "2.1", "name": "Group A: 系统检查类", "status": "completed"},
+        {"id": "2.2", "name": "Group B: 基础配置类", "status": "completed"},
+        {"id": "2.3", "name": "Group C: 用户与SSH", "status": "completed"},
+        {"id": "2.4", "name": "Group D: 系统优化", "status": "completed"},
+        {"id": "2.5", "name": "Group E: 网络驱动", "status": "completed"},
+        {"id": "2.6", "name": "Group F: GPU环境", "status": "completed"},
+        {"id": "2.7", "name": "Group G: 高级配置", "status": "completed"}
+      ]
+    },
+    {
+      "id": 3,
+      "name": "集成与测试",
+      "description": "单元测试、集成测试、文档编写",
+      "status": "completed",
+      "steps": [
+        {"id": "3.1", "name": "单元测试", "status": "completed"},
+        {"id": "3.2", "name": "集成测试", "status": "completed"},
+        {"id": "3.3", "name": "配置文件模板", "status": "completed"},
+        {"id": "3.4", "name": "文档编写", "status": "completed"}
+      ]
+    }
+  ],
+  "risks": [
+    {
+      "level": "high",
+      "description": "SSH连接不稳定",
+      "mitigation": "重试机制、连接池、心跳检测"
+    },
+    {
+      "level": "high",
+      "description": "驱动安装失败",
+      "mitigation": "预检查、版本兼容性验证、回滚机制"
+    },
+    {
+      "level": "medium",
+      "description": "多机版本不一致",
+      "mitigation": "步骤2-3强制检查，不匹配则中止"
+    },
+    {
+      "level": "medium",
+      "description": "网卡重命名冲突",
+      "mitigation": "两阶段重命名策略（tmp_前缀）"
+    },
+    {
+      "level": "medium",
+      "description": "重启后配置丢失",
+      "mitigation": "systemd服务化、rc.local备份"
+    },
+    {
+      "level": "medium",
+      "description": "批量操作超时",
+      "mitigation": "可配置超时、分批执行"
+    }
+  ],
+  "complexity": "high",
+  "estimatedLinesOfCode": "8000-12000",
+  "actualLinesOfCode": "~10000",
+  "filesCreated": 45,
+  "deploymentSteps": 34
+}

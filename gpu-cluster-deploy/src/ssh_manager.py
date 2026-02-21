@@ -1,0 +1,451 @@
+"""
+SSH连接管理器 - 支持跳转服务器、连接池、密钥/密码认证
+"""
+
+import os
+import time
+import socket
+import paramiko
+from typing import Dict, List, Optional, Tuple, Any
+from dataclasses import dataclass
+from contextlib import contextmanager
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class SSHResult:
+    """SSH命令执行结果"""
+    success: bool
+    exit_code: int
+    stdout: str
+    stderr: str
+    host: str
+    command: str
+    duration: float = 0.0
+
+    def __str__(self):
+        status = "✓" if self.success else "✗"
+        return f"{status} [{self.host}] exit={self.exit_code}, duration={self.duration:.2f}s"
+
+
+class SSHConnection:
+    """SSH连接封装"""
+
+    def __init__(self, host: str, port: int, username: str,
+                 password: Optional[str] = None,
+                 private_key: Optional[str] = None,
+                 jump_client: Optional[paramiko.SSHClient] = None):
+        self.host = host
+        self.port = port
+        self.username = username
+        self.password = password
+        self.private_key = private_key
+        self.jump_client = jump_client
+        self.client: Optional[paramiko.SSHClient] = None
+        self._connected = False
+
+    def connect(self, timeout: int = 30) -> bool:
+        """建立SSH连接"""
+        try:
+            self.client = paramiko.SSHClient()
+            self.client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+
+            # 通过跳转服务器连接
+            if self.jump_client:
+                transport = self.jump_client.get_transport()
+                if not transport:
+                    raise ConnectionError("跳转服务器传输层未初始化")
+
+                dest_addr = (self.host, self.port)
+                local_addr = ('127.0.0.1', 22)
+                channel = transport.open_channel('direct-tcpip', dest_addr, local_addr)
+
+                if self.private_key:
+                    key = paramiko.RSAKey.from_private_key_file(self.private_key)
+                    self.client.connect(
+                        hostname=self.host,
+                        port=self.port,
+                        username=self.username,
+                        pkey=key,
+                        sock=channel,
+                        timeout=timeout
+                    )
+                else:
+                    self.client.connect(
+                        hostname=self.host,
+                        port=self.port,
+                        username=self.username,
+                        password=self.password,
+                        sock=channel,
+                        timeout=timeout
+                    )
+            else:
+                # 直连
+                if self.private_key:
+                    key = paramiko.RSAKey.from_private_key_file(self.private_key)
+                    self.client.connect(
+                        hostname=self.host,
+                        port=self.port,
+                        username=self.username,
+                        pkey=key,
+                        timeout=timeout
+                    )
+                else:
+                    self.client.connect(
+                        hostname=self.host,
+                        port=self.port,
+                        username=self.username,
+                        password=self.password,
+                        timeout=timeout
+                    )
+
+            self._connected = True
+            logger.info(f"SSH连接成功: {self.username}@{self.host}:{self.port}")
+            return True
+
+        except Exception as e:
+            logger.error(f"SSH连接失败: {self.host} - {e}")
+            self._connected = False
+            return False
+
+    def disconnect(self):
+        """断开连接"""
+        if self.client:
+            self.client.close()
+            self.client = None
+        self._connected = False
+        logger.debug(f"SSH连接已断开: {self.host}")
+
+    def is_connected(self) -> bool:
+        """检查连接状态"""
+        if not self._connected or not self.client:
+            return False
+        transport = self.client.get_transport()
+        return transport is not None and transport.is_active()
+
+    def execute(self, command: str, timeout: int = 300,
+                sudo: bool = False, sudo_password: Optional[str] = None) -> SSHResult:
+        """执行命令"""
+        if not self.is_connected():
+            return SSHResult(
+                success=False,
+                exit_code=-1,
+                stdout="",
+                stderr="SSH连接未建立",
+                host=self.host,
+                command=command
+            )
+
+        start_time = time.time()
+
+        try:
+            if sudo and sudo_password:
+                command = f"echo '{sudo_password}' | sudo -S {command}"
+
+            stdin, stdout, stderr = self.client.exec_command(command, timeout=timeout)
+
+            exit_code = stdout.channel.recv_exit_status()
+            stdout_str = stdout.read().decode('utf-8', errors='replace')
+            stderr_str = stderr.read().decode('utf-8', errors='replace')
+
+            duration = time.time() - start_time
+
+            return SSHResult(
+                success=exit_code == 0,
+                exit_code=exit_code,
+                stdout=stdout_str,
+                stderr=stderr_str,
+                host=self.host,
+                command=command,
+                duration=duration
+            )
+
+        except socket.timeout:
+            duration = time.time() - start_time
+            return SSHResult(
+                success=False,
+                exit_code=-1,
+                stdout="",
+                stderr=f"命令执行超时 ({timeout}s)",
+                host=self.host,
+                command=command,
+                duration=duration
+            )
+        except Exception as e:
+            duration = time.time() - start_time
+            return SSHResult(
+                success=False,
+                exit_code=-1,
+                stdout="",
+                stderr=str(e),
+                host=self.host,
+                command=command,
+                duration=duration
+            )
+
+    def put_file(self, local_path: str, remote_path: str) -> bool:
+        """上传文件"""
+        if not self.is_connected():
+            logger.error("SSH连接未建立")
+            return False
+
+        try:
+            sftp = self.client.open_sftp()
+            sftp.put(local_path, remote_path)
+            sftp.close()
+            logger.info(f"文件上传成功: {local_path} -> {remote_path}")
+            return True
+        except Exception as e:
+            logger.error(f"文件上传失败: {e}")
+            return False
+
+    def get_file(self, remote_path: str, local_path: str) -> bool:
+        """下载文件"""
+        if not self.is_connected():
+            logger.error("SSH连接未建立")
+            return False
+
+        try:
+            sftp = self.client.open_sftp()
+            sftp.get(remote_path, local_path)
+            sftp.close()
+            logger.info(f"文件下载成功: {remote_path} -> {local_path}")
+            return True
+        except Exception as e:
+            logger.error(f"文件下载失败: {e}")
+            return False
+
+
+class SSHManager:
+    """SSH连接管理器"""
+
+    def __init__(self, jumphost_config: Optional[Dict] = None):
+        """
+        初始化SSH管理器
+
+        Args:
+            jumphost_config: 跳转服务器配置
+                {
+                    "host": "公网IP",
+                    "port": 22,
+                    "username": "用户名",
+                    "password": "密码",  # 可选
+                    "private_key": "私钥路径"  # 可选
+                }
+        """
+        self.jumphost_config = jumphost_config
+        self.jump_client: Optional[paramiko.SSHClient] = None
+        self.connections: Dict[str, SSHConnection] = {}
+        self._jump_connected = False
+
+    def connect_jumphost(self, timeout: int = 30) -> bool:
+        """连接跳转服务器"""
+        if not self.jumphost_config:
+            logger.debug("未配置跳转服务器，将使用直连模式")
+            self._jump_connected = True
+            return True
+
+        try:
+            self.jump_client = paramiko.SSHClient()
+            self.jump_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+
+            host = self.jumphost_config["host"]
+            port = self.jumphost_config.get("port", 22)
+            username = self.jumphost_config.get("username", "ubuntu")
+            password = self.jumphost_config.get("password")
+            private_key = self.jumphost_config.get("private_key")
+
+            if private_key:
+                key = paramiko.RSAKey.from_private_key_file(private_key)
+                self.jump_client.connect(
+                    hostname=host,
+                    port=port,
+                    username=username,
+                    pkey=key,
+                    timeout=timeout
+                )
+            else:
+                self.jump_client.connect(
+                    hostname=host,
+                    port=port,
+                    username=username,
+                    password=password,
+                    timeout=timeout
+                )
+
+            self._jump_connected = True
+            logger.info(f"跳转服务器连接成功: {username}@{host}:{port}")
+            return True
+
+        except Exception as e:
+            logger.error(f"跳转服务器连接失败: {e}")
+            self._jump_connected = False
+            return False
+
+    def disconnect_jumphost(self):
+        """断开跳转服务器连接"""
+        # 先断开所有内网连接
+        for conn in self.connections.values():
+            conn.disconnect()
+        self.connections.clear()
+
+        # 再断开跳转服务器
+        if self.jump_client:
+            self.jump_client.close()
+            self.jump_client = None
+        self._jump_connected = False
+        logger.info("跳转服务器连接已断开")
+
+    def get_connection(self, host: str, port: int = 22,
+                       username: str = "ubuntu",
+                       password: Optional[str] = None,
+                       private_key: Optional[str] = None,
+                       timeout: int = 30) -> Optional[SSHConnection]:
+        """获取或创建SSH连接"""
+        conn_key = f"{username}@{host}:{port}"
+
+        # 检查现有连接
+        if conn_key in self.connections:
+            conn = self.connections[conn_key]
+            if conn.is_connected():
+                return conn
+            else:
+                conn.disconnect()
+                del self.connections[conn_key]
+
+        # 确保跳转服务器已连接
+        if self.jumphost_config and not self._jump_connected:
+            if not self.connect_jumphost(timeout):
+                return None
+
+        # 创建新连接
+        conn = SSHConnection(
+            host=host,
+            port=port,
+            username=username,
+            password=password,
+            private_key=private_key,
+            jump_client=self.jump_client
+        )
+
+        if conn.connect(timeout):
+            self.connections[conn_key] = conn
+            return conn
+        else:
+            return None
+
+    def execute_on_host(self, host: str, command: str,
+                        port: int = 22,
+                        username: str = "ubuntu",
+                        password: Optional[str] = None,
+                        private_key: Optional[str] = None,
+                        timeout: int = 300,
+                        sudo: bool = False,
+                        sudo_password: Optional[str] = None) -> SSHResult:
+        """在指定主机上执行命令"""
+        conn = self.get_connection(
+            host=host,
+            port=port,
+            username=username,
+            password=password,
+            private_key=private_key
+        )
+
+        if not conn:
+            return SSHResult(
+                success=False,
+                exit_code=-1,
+                stdout="",
+                stderr="无法建立SSH连接",
+                host=host,
+                command=command
+            )
+
+        return conn.execute(command, timeout, sudo, sudo_password)
+
+    def execute_on_hosts(self, hosts: List[str], command: str,
+                         port: int = 22,
+                         username: str = "ubuntu",
+                         password: Optional[str] = None,
+                         private_key: Optional[str] = None,
+                         timeout: int = 300,
+                         sudo: bool = False,
+                         sudo_password: Optional[str] = None) -> Dict[str, SSHResult]:
+        """在多个主机上执行命令（并行）"""
+        import concurrent.futures
+
+        results = {}
+
+        def execute_single(host: str) -> Tuple[str, SSHResult]:
+            result = self.execute_on_host(
+                host=host,
+                command=command,
+                port=port,
+                username=username,
+                password=password,
+                private_key=private_key,
+                timeout=timeout,
+                sudo=sudo,
+                sudo_password=sudo_password
+            )
+            return host, result
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+            futures = {executor.submit(execute_single, host): host for host in hosts}
+
+            for future in concurrent.futures.as_completed(futures):
+                host, result = future.result()
+                results[host] = result
+
+        return results
+
+    def close_all(self):
+        """关闭所有连接"""
+        for conn in self.connections.values():
+            conn.disconnect()
+        self.connections.clear()
+
+        if self.jump_client:
+            self.jump_client.close()
+            self.jump_client = None
+        self._jump_connected = False
+        logger.info("所有SSH连接已关闭")
+
+    @contextmanager
+    def connection(self, host: str, port: int = 22,
+                   username: str = "ubuntu",
+                   password: Optional[str] = None,
+                   private_key: Optional[str] = None,
+                   timeout: int = 30):
+        """上下文管理器方式使用连接"""
+        conn = self.get_connection(
+            host=host,
+            port=port,
+            username=username,
+            password=password,
+            private_key=private_key,
+            timeout=timeout
+        )
+        try:
+            yield conn
+        finally:
+            # 连接保留在连接池中，不主动断开
+            pass
+
+
+def create_ssh_manager_from_config(jumphost_config) -> SSHManager:
+    """从配置创建SSH管理器"""
+    if not jumphost_config:
+        return SSHManager()
+
+    config = {
+        "host": jumphost_config.host,
+        "port": jumphost_config.port,
+        "username": jumphost_config.username,
+        "password": jumphost_config.password,
+        "private_key": jumphost_config.private_key
+    }
+
+    return SSHManager(config)

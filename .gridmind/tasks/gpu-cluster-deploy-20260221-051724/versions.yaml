@@ -1,0 +1,90 @@
+# 软件版本配置
+# ============================================
+
+# CUDA配置
+cuda:
+  version: "12.8"
+  toolkit_file: "cuda_12.8.0_570.86.10_linux.run"
+  # 可选：指定下载URL
+  # download_url: "https://developer.download.nvidia.com/compute/cuda/12.8.0/local_installers/cuda_12.8.0_570.86.10_linux.run"
+  # 可选：指定本地文件路径
+  # local_file: "/opt/cuda_12.8.0_570.86.10_linux.run"
+
+# NVIDIA驱动配置
+nvidia_driver:
+  version: "590.48.01"
+  file: "NVIDIA-Linux-x86_64-590.48.01.run"
+  # 可选：指定下载URL
+  # download_url: "https://www.nvidia.com/download/driverResults.aspx/..."
+  # 可选：指定本地文件路径
+  # local_file: "/opt/NVIDIA-Linux-x86_64-590.48.01.run"
+
+# MLNX_OFED驱动配置
+mlnx_ofed:
+  version: "24.10-2.1.8.0"
+  file: "MLNX_OFED_LINUX-24.10-2.1.8.0-ubuntu22.04-x86_64.tgz"
+  # 可选：指定下载URL
+  # download_url: "https://network.nvidia.com/products/infiniband-drivers/linux/mlnx_ofed/"
+  # 可选：指定本地文件路径
+  # local_file: "/opt/MLNX_OFED_LINUX-24.10-2.1.8.0-ubuntu22.04-x86_64.tgz"
+
+# 内核配置
+kernel:
+  # 模式选择
+  # - keep: 保持系统预装版本
+  # - specify: 指定版本
+  mode: "keep"
+
+  # mode: "keep" 时的配置
+  keep:
+    lock_version: true      # 是否锁定当前内核版本（禁止更新）
+    update_grub: true       # 是否更新GRUB固定启动版本
+
+  # mode: "specify" 时的配置
+  specify:
+    version: "5.15.0-91-generic"
+    # 可选：内核包下载源
+    # mirror: "http://archive.ubuntu.com/ubuntu/pool/main/l/linux/"
+    # 可选：本地deb包目录（离线部署）
+    # local_debs: "/opt/kernel-debs/"
+
+  # 说明：
+  # 当 mode: "specify" 时，程序会自动推导需要安装的包名：
+  # - linux-image-{version}
+  # - linux-headers-{version}
+  # - linux-modules-{version}
+  # - linux-modules-extra-{version}
+
+# OpenSSH配置
+openssh:
+  # CVE-2024-6387漏洞修复的最低版本
+  min_version: "1:8.9p1-3ubuntu0.10"
+  # 版本过低时是否自动升级
+  auto_upgrade: true
+
+# NCCL配置（可选）
+nccl:
+  enabled: false
+  # 安装方式: source（源码编译）| package（包安装）
+  install_method: "source"
+  # 源码编译时的安装路径
+  install_path: "/home/ubuntu/nccl"
+  # 包安装时的版本（可选，不指定则安装最新版）
+  # version: "2.18.3-1"
+
+# 其他可选配置
+optional:
+  # 是否安装nvidia-fabricmanager（NVLink显卡需要）
+  fabricmanager:
+    auto_detect: true       # 自动检测是否需要安装
+    # 或强制指定
+    # enabled: true
+
+  # 是否禁用ACS（GPU Direct RDMA优化）
+  disable_acs: true
+
+  # 是否配置MSR（5090 + Intel 5代CPU需要）
+  msr_settings:
+    auto_detect: true       # 自动检测是否需要配置
+    # 或强制指定
+    # enabled: true

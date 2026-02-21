@@ -1,0 +1,100 @@
+"""
+步骤09: 设置主机名和hosts绑定
+"""
+
+from typing import List, Dict
+from src.steps.base import BaseStep, StepResult, StepStatus
+
+
+class HostnameHosts(BaseStep):
+    """设置主机名和hosts绑定"""
+
+    step_id = "09"
+    step_name = "设置主机名和hosts绑定"
+    step_description = "设置节点主机名并同步hosts文件到所有机器"
+    requires_sudo = True
+    supports_batch = False  # 每个节点配置不同
+
+    def execute(self, hosts: List[str]) -> StepResult:
+        """执行主机名和hosts设置"""
+        all_results = {}
+
+        # 生成hosts条目
+        hosts_entries = []
+        for node in self.config.nodes:
+            hosts_entries.append(f"{node.ip} {node.hostname}")
+
+        hosts_content = "\n".join(hosts_entries)
+
+        for host in hosts:
+            # 获取节点信息
+            node = None
+            for n in self.config.nodes:
+                if n.ip == host:
+                    node = n
+                    break
+
+            if not node:
+                all_results[host] = {"success": False, "error": "节点未在配置中"}
+                continue
+
+            # 1. 设置主机名
+            set_hostname_cmd = f"hostnamectl set-hostname {node.hostname}"
+            hostname_result = self.execute_on_host(host, set_hostname_cmd, sudo=True)
+
+            if not hostname_result["success"]:
+                all_results[host] = {"success": False, "error": "设置主机名失败"}
+                continue
+
+            # 2. 移除127.0.1.1条目中的主机名
+            remove_cmd = "sed -i '/127.0.1.1/d' /etc/hosts"
+            self.execute_on_host(host, remove_cmd, sudo=True)
+
+            # 3. 检查是否已存在条目，避免重复添加
+            check_cmd = f"grep '{node.hostname}' /etc/hosts"
+            check_result = self.execute_on_host(host, check_cmd, sudo=False)
+
+            if check_result["success"]:
+                # 已存在，先删除旧条目
+                for entry in hosts_entries:
+                    entry_hostname = entry.split()[1]
+                    remove_old = f"sed -i '/{entry_hostname}$/d' /etc/hosts"
+                    self.execute_on_host(host, remove_old, sudo=True)
+
+            # 4. 添加hosts条目
+            add_hosts_cmd = f'''cat >> /etc/hosts << 'EOF'
+{hosts_content}
+EOF'''
+            add_result = self.execute_on_host(host, add_hosts_cmd, sudo=True)
+
+            all_results[host] = {
+                "success": add_result["success"],
+                "hostname": node.hostname
+            }
+
+        success_count = sum(1 for r in all_results.values() if r.get("success"))
+
+        return StepResult(
+            step_id=self.step_id,
+            step_name=self.step_name,
+            status=StepStatus.SUCCESS if success_count == len(hosts) else StepStatus.FAILED,
+            message=f"主机名和hosts设置完成，成功: {success_count}/{len(hosts)}",
+            details={"hosts_content": hosts_content},
+            host_results=all_results
+        )
+
+    def post_check(self, hosts: List[str]) -> bool:
+        """验证hosts设置"""
+        for host in hosts:
+            node = None
+            for n in self.config.nodes:
+                if n.ip == host:
+                    node = n
+                    break
+
+            if node:
+                cmd = f"hostname && grep '{node.hostname}' /etc/hosts"
+                result = self.execute_on_host(host, cmd)
+                if not result["success"]:
+                    return False
+        return True

@@ -1,0 +1,94 @@
+# GPU集群环境部署配置文件
+# ============================================
+
+# 集群基础配置
+cluster:
+  name: "gpu-cluster-001"
+  description: "生产环境GPU集群"
+
+# 跳转服务器配置
+jumphost:
+  host: "1.2.3.4"           # 公网IP（必填）
+  port: 22                   # SSH端口
+  auth:
+    type: "key"              # key | password
+    username: "ubuntu"
+    # 密钥认证方式
+    private_key: "~/.ssh/id_rsa"
+    # 或密码认证方式（二选一）
+    # password: "your-password"
+
+# 集群节点配置
+nodes:
+  # NFS Server节点（示例）
+  - hostname: "gpu-master"
+    ip: "10.254.43.65"
+    roles:
+      - nfs_server
+      - time_server
+    storage:
+      type: "raid10"         # single | raid1 | raid10
+      devices:
+        - "/dev/nvme0n1"
+        - "/dev/nvme1n1"
+        - "/dev/nvme2n1"
+        - "/dev/nvme3n1"
+      mount_point: "/ssd"
+
+  # GPU计算节点（示例）
+  - hostname: "gpu-node-01"
+    ip: "10.254.43.66"
+    roles:
+      - gpu_node
+    storage:
+      type: "single"
+      device: "/dev/nvme0n1"
+      mount_point: "/ssd"
+
+  - hostname: "gpu-node-02"
+    ip: "10.254.43.67"
+    roles:
+      - gpu_node
+    storage:
+      type: "single"
+      device: "/dev/nvme0n1"
+      mount_point: "/ssd"
+
+# 网络配置
+network:
+  # IB/RoCE网卡命名规则
+  nics:
+    compute_400g:
+      pattern: "mlx5_[0-7]"
+      count: 8
+      net_prefix: "ib"       # 对应网络设备名 ib0-ib7
+    storage_200g:
+      pattern: "mlx5_[8-9]"
+      count: 2
+      net_prefix: "ib"       # 对应网络设备名 ib8-ib9
+    mezz_internal:
+      pattern: "mezz_[0-3]"
+      count: 4
+      net_prefix: "mezz"     # 对应网络设备名 mezz_0-mezz_3
+
+# NFS配置（可选）
+nfs:
+  enabled: true
+  server: "gpu-master"       # NFS服务器主机名
+  export_path: "/ssd/nfs"    # 服务器导出路径
+  client_mount: "/data"      # 客户端挂载路径
+  # 客户端IP列表（自动从nodes中非nfs_server节点获取）
+  # client_ips: ["10.254.43.66", "10.254.43.67"]
+
+# 时间同步配置
+time_sync:
+  server: "gpu-master"       # 时间服务器主机名
+  timezone: "Asia/Shanghai"
+
+# 用户配置
+users:
+  ubuntu:
+    uid: 1001
+    gid: 1001
+    sudo_nopasswd: true
+    ssh_key_auth: true

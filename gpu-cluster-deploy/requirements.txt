@@ -1,0 +1,4 @@
+# GPU Cluster Deploy Dependencies
+paramiko>=3.0.0
+PyYAML>=6.0
+colorama>=0.4.6

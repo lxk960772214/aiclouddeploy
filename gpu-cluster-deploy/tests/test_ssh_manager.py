@@ -1,0 +1,114 @@
+"""
+SSH管理器单元测试
+"""
+
+import unittest
+from unittest.mock import Mock, patch, MagicMock
+from pathlib import Path
+import sys
+
+sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+
+from ssh_manager import SSHManager, SSHConnection, SSHResult
+
+
+class TestSSHResult(unittest.TestCase):
+    """SSH结果测试"""
+
+    def test_success_result(self):
+        """测试成功结果"""
+        result = SSHResult(
+            success=True,
+            exit_code=0,
+            stdout="output",
+            stderr="",
+            host="192.168.1.1",
+            command="echo test"
+        )
+        self.assertTrue(result.success)
+        self.assertEqual(result.exit_code, 0)
+
+    def test_failure_result(self):
+        """测试失败结果"""
+        result = SSHResult(
+            success=False,
+            exit_code=1,
+            stdout="",
+            stderr="error",
+            host="192.168.1.1",
+            command="false"
+        )
+        self.assertFalse(result.success)
+
+
+class TestSSHManager(unittest.TestCase):
+    """SSH管理器测试"""
+
+    def test_init_without_jumphost(self):
+        """测试无跳转服务器初始化"""
+        manager = SSHManager()
+        self.assertIsNone(manager.jumphost_config)
+        self.assertIsNone(manager.jump_client)
+
+    def test_init_with_jumphost(self):
+        """测试带跳转服务器初始化"""
+        config = {
+            "host": "192.168.1.1",
+            "port": 22,
+            "username": "ubuntu",
+            "private_key": "~/.ssh/id_rsa"
+        }
+        manager = SSHManager(config)
+        self.assertEqual(manager.jumphost_config, config)
+
+    @patch('ssh_manager.paramiko.SSHClient')
+    def test_connect_jumphost_key_auth(self, mock_ssh_client):
+        """测试密钥认证连接跳转服务器"""
+        config = {
+            "host": "192.168.1.1",
+            "port": 22,
+            "username": "ubuntu",
+            "private_key": "~/.ssh/id_rsa"
+        }
+        manager = SSHManager(config)
+
+        mock_client = MagicMock()
+        mock_ssh_client.return_value = mock_client
+
+        result = manager.connect_jumphost()
+
+        self.assertTrue(result)
+        mock_client.connect.assert_called_once()
+
+    def test_close_all(self):
+        """测试关闭所有连接"""
+        manager = SSHManager()
+
+        # 添加模拟连接
+        mock_conn = MagicMock()
+        manager.connections["test"] = mock_conn
+
+        manager.close_all()
+
+        mock_conn.disconnect.assert_called_once()
+        self.assertEqual(len(manager.connections), 0)
+
+
+class TestSSHConnection(unittest.TestCase):
+    """SSH连接测试"""
+
+    def test_connection_init(self):
+        """测试连接初始化"""
+        conn = SSHConnection(
+            host="192.168.1.1",
+            port=22,
+            username="ubuntu",
+            private_key="~/.ssh/id_rsa"
+        )
+        self.assertEqual(conn.host, "192.168.1.1")
+        self.assertEqual(conn.port, 22)
+        self.assertFalse(conn._connected)
+
+
+if __name__ == "__main__":
+    unittest.main()
