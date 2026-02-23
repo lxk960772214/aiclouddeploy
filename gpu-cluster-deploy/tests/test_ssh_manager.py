@@ -6,6 +6,7 @@ import unittest
 from unittest.mock import Mock, patch, MagicMock
 from pathlib import Path
 import sys
+import os
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
@@ -56,14 +57,21 @@ class TestSSHManager(unittest.TestCase):
             "host": "192.168.1.1",
             "port": 22,
             "username": "ubuntu",
-            "private_key": "~/.ssh/id_rsa"
+            "private_key": "/tmp/test_key"
         }
         manager = SSHManager(config)
         self.assertEqual(manager.jumphost_config, config)
 
     @patch('ssh_manager.paramiko.SSHClient')
-    def test_connect_jumphost_key_auth(self, mock_ssh_client):
+    @patch('ssh_manager.paramiko.RSAKey')
+    @patch('os.path.expanduser')
+    @patch('os.path.exists')
+    def test_connect_jumphost_key_auth(self, mock_exists, mock_expanduser, mock_rsa_key, mock_ssh_client):
         """测试密钥认证连接跳转服务器"""
+        # Mock 路径扩展
+        mock_expanduser.return_value = "/home/test/.ssh/id_rsa"
+        mock_exists.return_value = True
+
         config = {
             "host": "192.168.1.1",
             "port": 22,
@@ -72,8 +80,13 @@ class TestSSHManager(unittest.TestCase):
         }
         manager = SSHManager(config)
 
+        # Mock SSH client
         mock_client = MagicMock()
         mock_ssh_client.return_value = mock_client
+
+        # Mock RSA key
+        mock_key = MagicMock()
+        mock_rsa_key.from_private_key_file.return_value = mock_key
 
         result = manager.connect_jumphost()
 
@@ -103,7 +116,7 @@ class TestSSHConnection(unittest.TestCase):
             host="192.168.1.1",
             port=22,
             username="ubuntu",
-            private_key="~/.ssh/id_rsa"
+            private_key="/tmp/test_key"
         )
         self.assertEqual(conn.host, "192.168.1.1")
         self.assertEqual(conn.port, 22)
