@@ -249,6 +249,11 @@ class ClusterConfig:
     time_sync: TimeSyncConfig = field(default_factory=TimeSyncConfig)
     network: NetworkConfig = field(default_factory=NetworkConfig)
 
+    @property
+    def node_count(self) -> int:
+        """返回集群节点数量"""
+        return len(self.nodes)
+
 
 class ConfigLoader:
     """配置加载器"""
