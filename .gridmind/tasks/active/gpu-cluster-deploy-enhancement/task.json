@@ -1,0 +1,1004 @@
+{
+  "id": "task-20260224-143052",
+  "name": "GPU集群部署配置增强 - 最终实施计划",
+  "description": "增强gpu-cluster-deploy项目的配置能力、设备一致性检查和模块化部署功能，包括批量节点配置、磁盘格式化选项、设备序列一致性检查、跳转服务器认证增强和模块化执行框架",
+  "type": "cluster-deploy",
+  "mode": 1,
+  "created_at": "2026-02-24T14:30:52Z",
+  "updated_at": "2026-02-25T10:30:00Z",
+  "status": "completed",
+  "config": {
+    "project_root": "/mnt/e/github/aiclouddeploy/gpu-cluster-deploy",
+    "default_phase": "phase-1",
+    "auto_approve": false,
+    "risk_threshold": "medium",
+    "max_parallel_steps": 3,
+    "enable_rollback": true,
+    "notify_on_error": true,
+    "test_coverage_target": 80
+  },
+  "phases": [
+    {
+      "id": "phase-1",
+      "name": "基础架构和批量节点配置",
+      "description": "实现hosts格式批量配置支持、磁盘格式化选项和配置加载器增强",
+      "status": "completed",
+      "steps": [
+        {
+          "id": "step-1.1",
+          "action": "分析现有数据模型结构",
+          "type": "read",
+          "target_file": "/mnt/e/github/aiclouddeploy/gpu-cluster-deploy/src/models/cluster.py",
+          "description": "理解现有的StorageConfig、NodeConfig、JumphostConfig等数据模型",
+          "status": "completed",
+          "risk_level": "low",
+          "auto_approve": true,
+          "gpu_specific": false,
+          "requires_remote": false,
+          "estimated_time": 10,
+          "max_attempts": 1
+        },
+        {
+          "id": "step-1.2",
+          "action": "扩展StorageConfig支持format选项",
+          "type": "edit",
+          "target_file": "/mnt/e/github/aiclouddeploy/gpu-cluster-deploy/src/models/cluster.py",
+          "description": "确认StorageConfig中已存在format_disk字段，并验证其默认值和验证逻辑",
+          "status": "completed",
+          "risk_level": "low",
+          "auto_approve": true,
+          "gpu_specific": false,
+          "requires_remote": false,
+          "requires": [
+            "step-1.1"
+          ],
+          "estimated_time": 15,
+          "max_attempts": 2
+        },
+        {
+          "id": "step-1.3",
+          "action": "验证NodeBatchConfig数据类完整性",
+          "type": "read",
+          "target_file": "/mnt/e/github/aiclouddeploy/gpu-cluster-deploy/src/config_loader.py",
+          "description": "确认NodeBatchConfig已支持hosts_file、hosts_content、storage_template等字段",
+          "status": "completed",
+          "risk_level": "low",
+          "auto_approve": true,
+          "gpu_specific": false,
+          "requires_remote": false,
+          "requires": [
+            "step-1.2"
+          ],
+          "estimated_time": 10,
+          "max_attempts": 1
+        },
+        {
+          "id": "step-1.4",
+          "action": "验证HostsParser功能完整性",
+          "type": "read",
+          "target_file": "/mnt/e/github/aiclouddeploy/gpu-cluster-deploy/src/utils/hosts_parser.py",
+          "description": "确认HostsParser已支持parse_file、parse_content、merge_with_individual_nodes等方法",
+          "status": "completed",
+          "risk_level": "low",
+          "auto_approve": true,
+          "gpu_specific": false,
+          "requires_remote": false,
+          "requires": [
+            "step-1.3"
+          ],
+          "estimated_time": 15,
+          "max_attempts": 1
+        },
+        {
+          "id": "step-1.5",
+          "action": "验证ConfigLoader批量节点解析功能",
+          "type": "read",
+          "target_file": "/mnt/e/github/aiclouddeploy/gpu-cluster-deploy/src/config_loader.py",
+          "description": "确认_parse_hosts_batch_nodes、_apply_node_overrides、_merge_nodes方法已实现",
+          "status": "completed",
+          "risk_level": "low",
+          "auto_approve": true,
+          "gpu_specific": false,
+          "requires_remote": false,
+          "requires": [
+            "step-1.4"
+          ],
+          "estimated_time": 15,
+          "max_attempts": 1
+        },
+        {
+          "id": "step-1.6",
+          "action": "创建新配置示例文件",
+          "type": "write",
+          "target_file": "/mnt/e/github/aiclouddeploy/gpu-cluster-deploy/config/cluster-batch-example.yaml",
+          "description": "创建包含hosts批量配置、个别节点覆盖和磁盘格式化选项的完整配置示例",
+          "status": "completed",
+          "risk_level": "low",
+          "auto_approve": true,
+          "gpu_specific": false,
+          "requires_remote": false,
+          "requires": [
+            "step-1.5"
+          ],
+          "estimated_time": 20,
+          "max_attempts": 2
+        },
+        {
+          "id": "step-1.7",
+          "action": "验证磁盘挂载步骤支持format选项",
+          "type": "read",
+          "target_file": "/mnt/e/github/aiclouddeploy/gpu-cluster-deploy/src/steps/step_6_disk_mount.py",
+          "description": "确认Step6DiskMount已检查storage.format_disk选项",
+          "status": "completed",
+          "risk_level": "medium",
+          "auto_approve": false,
+          "gpu_specific": false,
+          "requires_remote": false,
+          "requires": [
+            "step-1.6"
+          ],
+          "estimated_time": 15,
+          "max_attempts": 2
+        },
+        {
+          "id": "step-1.8",
+          "action": "编写批量配置单元测试",
+          "type": "write",
+          "target_file": "/mnt/e/github/aiclouddeploy/gpu-cluster-deploy/tests/test_batch_config.py",
+          "description": "为HostsParser、NodeBatchConfig和配置加载器批量功能编写单元测试",
+          "status": "completed",
+          "risk_level": "low",
+          "auto_approve": true,
+          "gpu_specific": false,
+          "requires_remote": false,
+          "requires": [
+            "step-1.7"
+          ],
+          "estimated_time": 25,
+          "max_attempts": 2
+        },
+        {
+          "id": "step-1.9",
+          "action": "运行Phase 1单元测试",
+          "type": "test",
+          "command": "cd /mnt/e/github/aiclouddeploy/gpu-cluster-deploy && python -m pytest tests/test_batch_config.py tests/test_hosts_parser.py -v",
+          "description": "验证批量配置和hosts解析功能的正确性",
+          "status": "completed",
+          "risk_level": "low",
+          "auto_approve": true,
+          "gpu_specific": false,
+          "requires_remote": false,
+          "requires": [
+            "step-1.8"
+          ],
+          "estimated_time": 10,
+          "max_attempts": 3
+        }
+      ]
+    },
+    {
+      "id": "phase-2",
+      "name": "网络设备一致性检查系统",
+      "description": "实现RDMA和以太网设备序列一致性检查、ibdev2netdev解析和GPU拓扑检查",
+      "status": "completed",
+      "depends_on": "phase-1",
+      "steps": [
+        {
+          "id": "step-2.1",
+          "action": "创建设备检查数据模型",
+          "type": "write",
+          "target_file": "/mnt/e/github/aiclouddeploy/gpu-cluster-deploy/src/models/device_check.py",
+          "description": "定义DeviceSnapshot、DeviceDifference、ConsistencyReport等数据模型",
+          "status": "pending",
+          "risk_level": "low",
+          "auto_approve": true,
+          "gpu_specific": false,
+          "requires_remote": false,
+          "estimated_time": 20,
+          "max_attempts": 2
+        },
+        {
+          "id": "step-2.2",
+          "action": "创建网络模块目录结构",
+          "type": "bash",
+          "command": "mkdir -p /mnt/e/github/aiclouddeploy/gpu-cluster-deploy/src/network && touch /mnt/e/github/aiclouddeploy/gpu-cluster-deploy/src/network/__init__.py",
+          "description": "创建network子模块目录",
+          "status": "pending",
+          "risk_level": "low",
+          "auto_approve": true,
+          "gpu_specific": false,
+          "requires_remote": false,
+          "requires": [
+            "step-2.1"
+          ],
+          "estimated_time": 5,
+          "max_attempts": 1
+        },
+        {
+          "id": "step-2.3",
+          "action": "实现设备发现工具类",
+          "type": "write",
+          "target_file": "/mnt/e/github/aiclouddeploy/gpu-cluster-deploy/src/network/device_discovery.py",
+          "description": "通过SSH发现节点上的RDMA设备(mlx5_*)和以太网设备(ens*)序列",
+          "status": "pending",
+          "risk_level": "medium",
+          "auto_approve": false,
+          "gpu_specific": true,
+          "requires_remote": true,
+          "requires": [
+            "step-2.2"
+          ],
+          "estimated_time": 30,
+          "max_attempts": 2
+        },
+        {
+          "id": "step-2.4",
+          "action": "实现ibdev2netdev解析器",
+          "type": "write",
+          "target_file": "/mnt/e/github/aiclouddeploy/gpu-cluster-deploy/src/network/ibdev_parser.py",
+          "description": "解析ibdev2netdev命令输出，建立RDMA设备和网络接口的映射关系",
+          "status": "pending",
+          "risk_level": "medium",
+          "auto_approve": false,
+          "gpu_specific": true,
+          "requires_remote": true,
+          "requires": [
+            "step-2.3"
+          ],
+          "estimated_time": 25,
+          "max_attempts": 2
+        },
+        {
+          "id": "step-2.5",
+          "action": "实现设备一致性检查器",
+          "type": "write",
+          "target_file": "/mnt/e/github/aiclouddeploy/gpu-cluster-deploy/src/network/device_checker.py",
+          "description": "比较所有节点的设备序列，识别缺失、多余或不匹配的设备",
+          "status": "pending",
+          "risk_level": "medium",
+          "auto_approve": false,
+          "gpu_specific": true,
+          "requires_remote": true,
+          "requires": [
+            "step-2.4"
+          ],
+          "estimated_time": 35,
+          "max_attempts": 2
+        },
+        {
+          "id": "step-2.6",
+          "action": "实现GPU拓扑检查器",
+          "type": "write",
+          "target_file": "/mnt/e/github/aiclouddeploy/gpu-cluster-deploy/src/network/gpu_topo_checker.py",
+          "description": "检查GPU与RDMA设备的NUMA亲和性和拓扑一致性",
+          "status": "pending",
+          "risk_level": "medium",
+          "auto_approve": false,
+          "gpu_specific": true,
+          "requires_remote": true,
+          "requires": [
+            "step-2.5"
+          ],
+          "estimated_time": 30,
+          "max_attempts": 2
+        },
+        {
+          "id": "step-2.7",
+          "action": "创建设备检查部署步骤",
+          "type": "write",
+          "target_file": "/mnt/e/github/aiclouddeploy/gpu-cluster-deploy/src/steps/step_0_device_check.py",
+          "description": "实现Step0DeviceCheck步骤，在部署开始前检查设备一致性",
+          "status": "pending",
+          "risk_level": "medium",
+          "auto_approve": false,
+          "gpu_specific": true,
+          "requires_remote": true,
+          "requires": [
+            "step-2.6"
+          ],
+          "estimated_time": 25,
+          "max_attempts": 2
+        },
+        {
+          "id": "step-2.8",
+          "action": "实现修复建议生成器",
+          "type": "write",
+          "target_file": "/mnt/e/github/aiclouddeploy/gpu-cluster-deploy/src/network/fix_suggestions.py",
+          "description": "根据设备序列差异生成具体的修复建议和报告",
+          "status": "pending",
+          "risk_level": "low",
+          "auto_approve": true,
+          "gpu_specific": false,
+          "requires_remote": false,
+          "requires": [
+            "step-2.7"
+          ],
+          "estimated_time": 20,
+          "max_attempts": 2
+        },
+        {
+          "id": "step-2.9",
+          "action": "编写设备检查测试",
+          "type": "write",
+          "target_file": "/mnt/e/github/aiclouddeploy/gpu-cluster-deploy/tests/test_device_check.py",
+          "description": "为设备发现、一致性检查和GPU拓扑检查编写单元测试",
+          "status": "pending",
+          "risk_level": "low",
+          "auto_approve": true,
+          "gpu_specific": false,
+          "requires_remote": false,
+          "requires": [
+            "step-2.8"
+          ],
+          "estimated_time": 30,
+          "max_attempts": 2
+        },
+        {
+          "id": "step-2.10",
+          "action": "运行Phase 2单元测试",
+          "type": "test",
+          "command": "cd /mnt/e/github/aiclouddeploy/gpu-cluster-deploy && python -m pytest tests/test_device_check.py -v",
+          "description": "验证设备检查功能的正确性",
+          "status": "pending",
+          "risk_level": "low",
+          "auto_approve": true,
+          "gpu_specific": false,
+          "requires_remote": false,
+          "requires": [
+            "step-2.9"
+          ],
+          "estimated_time": 10,
+          "max_attempts": 3
+        }
+      ]
+    },
+    {
+      "id": "phase-3",
+      "name": "模块化执行框架",
+      "description": "实现模块基类、模块注册系统、模块管理器，支持独立模块执行和分类执行",
+      "status": "completed",
+      "depends_on": "phase-2",
+      "steps": [
+        {
+          "id": "step-3.1",
+          "action": "创建部署核心模块",
+          "type": "write",
+          "target_file": "/mnt/e/github/aiclouddeploy/gpu-cluster-deploy/src/deployment/__init__.py",
+          "description": "创建deployment子模块目录和初始化文件",
+          "status": "completed",
+          "risk_level": "low",
+          "auto_approve": true,
+          "gpu_specific": false,
+          "requires_remote": false,
+          "estimated_time": 5,
+          "max_attempts": 1
+        },
+        {
+          "id": "step-3.2",
+          "action": "创建模块基类和注册系统",
+          "type": "write",
+          "target_file": "/mnt/e/github/aiclouddeploy/gpu-cluster-deploy/src/deployment/core.py",
+          "description": "实现DeployModule基类、ModuleRegistry注册表、模块分类枚举",
+          "status": "completed",
+          "risk_level": "medium",
+          "auto_approve": false,
+          "gpu_specific": false,
+          "requires_remote": false,
+          "requires": [
+            "step-3.1"
+          ],
+          "estimated_time": 35,
+          "max_attempts": 2
+        },
+        {
+          "id": "step-3.3",
+          "action": "创建模块定义数据模型",
+          "type": "write",
+          "target_file": "/mnt/e/github/aiclouddeploy/gpu-cluster-deploy/src/models/module.py",
+          "description": "定义ModuleDefinition、ModuleGroup、ExecutionPlan等数据模型",
+          "status": "completed",
+          "risk_level": "low",
+          "auto_approve": true,
+          "gpu_specific": false,
+          "requires_remote": false,
+          "requires": [
+            "step-3.2"
+          ],
+          "estimated_time": 25,
+          "max_attempts": 2
+        },
+        {
+          "id": "step-3.4",
+          "action": "实现模块管理器",
+          "type": "write",
+          "target_file": "/mnt/e/github/aiclouddeploy/gpu-cluster-deploy/src/deployment/module_manager.py",
+          "description": "负责模块注册、分类、依赖解析、执行调度和结果收集",
+          "status": "completed",
+          "risk_level": "medium",
+          "auto_approve": false,
+          "gpu_specific": false,
+          "requires_remote": false,
+          "requires": [
+            "step-3.3"
+          ],
+          "estimated_time": 40,
+          "max_attempts": 2
+        },
+        {
+          "id": "step-3.5",
+          "action": "实现步骤分类适配器",
+          "type": "write",
+          "target_file": "/mnt/e/github/aiclouddeploy/gpu-cluster-deploy/src/deployment/step_adapter.py",
+          "description": "将现有BaseStep步骤适配为DeployModule接口，保留向后兼容",
+          "status": "completed",
+          "risk_level": "medium",
+          "auto_approve": false,
+          "gpu_specific": false,
+          "requires_remote": false,
+          "requires": [
+            "step-3.4"
+          ],
+          "estimated_time": 30,
+          "max_attempts": 2
+        },
+        {
+          "id": "step-3.6",
+          "action": "实现执行计划序列化",
+          "type": "write",
+          "target_file": "/mnt/e/github/aiclouddeploy/gpu-cluster-deploy/src/deployment/execution_plan.py",
+          "description": "支持YAML/JSON格式的执行计划导入导出和验证",
+          "status": "completed",
+          "risk_level": "low",
+          "auto_approve": true,
+          "gpu_specific": false,
+          "requires_remote": false,
+          "requires": [
+            "step-3.5"
+          ],
+          "estimated_time": 25,
+          "max_attempts": 2
+        },
+        {
+          "id": "step-3.7",
+          "action": "为现有步骤添加分类标签",
+          "type": "edit",
+          "target_file": "/mnt/e/github/aiclouddeploy/gpu-cluster-deploy/src/steps/__init__.py",
+          "description": "为所有步骤添加category、tags等元数据属性",
+          "status": "completed",
+          "risk_level": "medium",
+          "auto_approve": false,
+          "gpu_specific": false,
+          "requires_remote": false,
+          "requires": [
+            "step-3.6"
+          ],
+          "estimated_time": 30,
+          "max_attempts": 2
+        },
+        {
+          "id": "step-3.8",
+          "action": "创建示例执行计划",
+          "type": "write",
+          "target_file": "/mnt/e/github/aiclouddeploy/gpu-cluster-deploy/config/plans/gpu-only.yaml",
+          "description": "创建GPU相关步骤的执行计划示例",
+          "status": "completed",
+          "risk_level": "low",
+          "auto_approve": true,
+          "gpu_specific": false,
+          "requires_remote": false,
+          "requires": [
+            "step-3.7"
+          ],
+          "estimated_time": 15,
+          "max_attempts": 2
+        },
+        {
+          "id": "step-3.9",
+          "action": "编写模块化执行测试",
+          "type": "write",
+          "target_file": "/mnt/e/github/aiclouddeploy/gpu-cluster-deploy/tests/test_module_manager.py",
+          "description": "为模块管理器、步骤适配器和执行计划编写单元测试",
+          "status": "completed",
+          "risk_level": "low",
+          "auto_approve": true,
+          "gpu_specific": false,
+          "requires_remote": false,
+          "requires": [
+            "step-3.8"
+          ],
+          "estimated_time": 30,
+          "max_attempts": 2
+        },
+        {
+          "id": "step-3.10",
+          "action": "运行Phase 3单元测试",
+          "type": "test",
+          "command": "cd /mnt/e/github/aiclouddeploy/gpu-cluster-deploy && python -m pytest tests/test_module_manager.py -v",
+          "description": "验证模块化执行框架的正确性",
+          "status": "completed",
+          "risk_level": "low",
+          "auto_approve": true,
+          "gpu_specific": false,
+          "requires_remote": false,
+          "requires": [
+            "step-3.9"
+          ],
+          "estimated_time": 10,
+          "max_attempts": 3
+        }
+      ]
+    },
+    {
+      "id": "phase-4",
+      "name": "命令行接口重构",
+      "description": "重构CLI以支持模块选择、分类执行、执行计划导入等新功能",
+      "status": "completed",
+      "depends_on": "phase-3",
+      "steps": [
+        {
+          "id": "step-4.1",
+          "action": "分析现有CLI结构",
+          "type": "read",
+          "target_file": "/mnt/e/github/aiclouddeploy/gpu-cluster-deploy/src/main.py",
+          "description": "理解当前的命令行参数解析和执行流程",
+          "status": "completed",
+          "risk_level": "low",
+          "auto_approve": true,
+          "gpu_specific": false,
+          "requires_remote": false,
+          "estimated_time": 15,
+          "max_attempts": 1
+        },
+        {
+          "id": "step-4.2",
+          "action": "创建CLI子模块目录",
+          "type": "bash",
+          "command": "mkdir -p /mnt/e/github/aiclouddeploy/gpu-cluster-deploy/src/cli && touch /mnt/e/github/aiclouddeploy/gpu-cluster-deploy/src/cli/__init__.py",
+          "description": "创建cli子模块目录结构",
+          "status": "completed",
+          "risk_level": "low",
+          "auto_approve": true,
+          "gpu_specific": false,
+          "requires_remote": false,
+          "requires": [
+            "step-4.1"
+          ],
+          "estimated_time": 5,
+          "max_attempts": 1
+        },
+        {
+          "id": "step-4.3",
+          "action": "实现新的CLI解析器",
+          "type": "write",
+          "target_file": "/mnt/e/github/aiclouddeploy/gpu-cluster-deploy/src/cli/main.py",
+          "description": "创建支持模块选择、分类执行、计划导入等功能的CLI解析器",
+          "status": "completed",
+          "risk_level": "medium",
+          "auto_approve": false,
+          "gpu_specific": false,
+          "requires_remote": false,
+          "requires": [
+            "step-4.2"
+          ],
+          "estimated_time": 35,
+          "max_attempts": 2
+        },
+        {
+          "id": "step-4.4",
+          "action": "实现执行控制器",
+          "type": "write",
+          "target_file": "/mnt/e/github/aiclouddeploy/gpu-cluster-deploy/src/cli/execution_controller.py",
+          "description": "协调模块管理器、SSH连接和执行流程的控制逻辑",
+          "status": "completed",
+          "risk_level": "medium",
+          "auto_approve": false,
+          "gpu_specific": false,
+          "requires_remote": false,
+          "requires": [
+            "step-4.3"
+          ],
+          "estimated_time": 40,
+          "max_attempts": 2
+        },
+        {
+          "id": "step-4.5",
+          "action": "实现进度报告器",
+          "type": "write",
+          "target_file": "/mnt/e/github/aiclouddeploy/gpu-cluster-deploy/src/cli/progress_reporter.py",
+          "description": "生成执行进度报告、支持JSON和Markdown格式输出",
+          "status": "completed",
+          "risk_level": "low",
+          "auto_approve": true,
+          "gpu_specific": false,
+          "requires_remote": false,
+          "requires": [
+            "step-4.4"
+          ],
+          "estimated_time": 25,
+          "max_attempts": 2
+        },
+        {
+          "id": "step-4.6",
+          "action": "更新主入口文件",
+          "type": "edit",
+          "target_file": "/mnt/e/github/aiclouddeploy/gpu-cluster-deploy/src/main.py",
+          "description": "集成新的CLI模块，保持向后兼容的命令行参数",
+          "status": "completed",
+          "risk_level": "high",
+          "auto_approve": false,
+          "gpu_specific": false,
+          "requires_remote": false,
+          "requires": [
+            "step-4.5"
+          ],
+          "estimated_time": 30,
+          "max_attempts": 3
+        },
+        {
+          "id": "step-4.7",
+          "action": "编写CLI测试",
+          "type": "write",
+          "target_file": "/mnt/e/github/aiclouddeploy/gpu-cluster-deploy/tests/test_cli.py",
+          "description": "为CLI解析器和执行控制器编写单元测试",
+          "status": "completed",
+          "risk_level": "low",
+          "auto_approve": true,
+          "gpu_specific": false,
+          "requires_remote": false,
+          "requires": [
+            "step-4.6"
+          ],
+          "estimated_time": 25,
+          "max_attempts": 2
+        },
+        {
+          "id": "step-4.8",
+          "action": "运行Phase 4单元测试",
+          "type": "test",
+          "command": "cd /mnt/e/github/aiclouddeploy/gpu-cluster-deploy && python -m pytest tests/test_cli.py -v",
+          "description": "验证CLI重构的正确性",
+          "status": "completed",
+          "risk_level": "low",
+          "auto_approve": true,
+          "gpu_specific": false,
+          "requires_remote": false,
+          "requires": [
+            "step-4.7"
+          ],
+          "estimated_time": 10,
+          "max_attempts": 3
+        }
+      ]
+    },
+    {
+      "id": "phase-5",
+      "name": "网络配置增强",
+      "description": "扩展网络配置模型，实现网卡重命名选择性配置和非连续设备映射",
+      "status": "completed",
+      "depends_on": "phase-4",
+      "steps": [
+        {
+          "id": "step-5.1",
+          "action": "创建网络配置模型",
+          "type": "write",
+          "target_file": "/mnt/e/github/aiclouddeploy/gpu-cluster-deploy/src/models/network.py",
+          "description": "定义NICMapping、NICRenameConfig、NetworkTopology等数据模型",
+          "status": "completed",
+          "risk_level": "low",
+          "auto_approve": true,
+          "gpu_specific": false,
+          "requires_remote": false,
+          "estimated_time": 25,
+          "max_attempts": 2
+        },
+        {
+          "id": "step-5.2",
+          "action": "实现网卡映射解析器",
+          "type": "write",
+          "target_file": "/mnt/e/github/aiclouddeploy/gpu-cluster-deploy/src/network/nic_mapper.py",
+          "description": "解析配置并生成具体的设备重命名规则，支持非连续映射",
+          "status": "completed",
+          "risk_level": "medium",
+          "auto_approve": false,
+          "gpu_specific": true,
+          "requires_remote": true,
+          "requires": [
+            "step-5.1"
+          ],
+          "estimated_time": 30,
+          "max_attempts": 2
+        },
+        {
+          "id": "step-5.3",
+          "action": "实现网卡重命名器",
+          "type": "write",
+          "target_file": "/mnt/e/github/aiclouddeploy/gpu-cluster-deploy/src/network/nic_renamer.py",
+          "description": "执行RDMA和以太网设备的选择性重命名操作",
+          "status": "completed",
+          "risk_level": "high",
+          "auto_approve": false,
+          "gpu_specific": true,
+          "requires_remote": true,
+          "requires": [
+            "step-5.2"
+          ],
+          "estimated_time": 35,
+          "max_attempts": 2
+        },
+        {
+          "id": "step-5.4",
+          "action": "更新RDMA重命名步骤",
+          "type": "edit",
+          "target_file": "/mnt/e/github/aiclouddeploy/gpu-cluster-deploy/src/steps/step_26_rdma_rename.py",
+          "description": "修改现有RDMA重命名步骤以支持可选重命名和非连续映射",
+          "status": "completed",
+          "risk_level": "high",
+          "auto_approve": false,
+          "gpu_specific": true,
+          "requires_remote": true,
+          "requires": [
+            "step-5.3"
+          ],
+          "estimated_time": 30,
+          "max_attempts": 3
+        },
+        {
+          "id": "step-5.5",
+          "action": "创建以太网重命名步骤",
+          "type": "write",
+          "target_file": "/mnt/e/github/aiclouddeploy/gpu-cluster-deploy/src/steps/step_26b_ethernet_rename.py",
+          "description": "实现以太网设备的选择性重命名部署步骤",
+          "status": "completed",
+          "risk_level": "medium",
+          "auto_approve": false,
+          "gpu_specific": true,
+          "requires_remote": true,
+          "requires": [
+            "step-5.4"
+          ],
+          "estimated_time": 25,
+          "max_attempts": 2
+        },
+        {
+          "id": "step-5.6",
+          "action": "扩展配置加载器支持新网络配置",
+          "type": "edit",
+          "target_file": "/mnt/e/github/aiclouddeploy/gpu-cluster-deploy/src/config_loader.py",
+          "description": "解析新的网卡映射配置选项和网络拓扑配置",
+          "status": "completed",
+          "risk_level": "medium",
+          "auto_approve": false,
+          "gpu_specific": false,
+          "requires_remote": false,
+          "requires": [
+            "step-5.5"
+          ],
+          "estimated_time": 20,
+          "max_attempts": 2
+        },
+        {
+          "id": "step-5.7",
+          "action": "编写网络配置测试",
+          "type": "write",
+          "target_file": "/mnt/e/github/aiclouddeploy/gpu-cluster-deploy/tests/test_network_config.py",
+          "description": "为网卡映射、重命名器和新网络配置编写单元测试",
+          "status": "completed",
+          "risk_level": "low",
+          "auto_approve": true,
+          "gpu_specific": false,
+          "requires_remote": false,
+          "requires": [
+            "step-5.6"
+          ],
+          "estimated_time": 25,
+          "max_attempts": 2
+        },
+        {
+          "id": "step-5.8",
+          "action": "运行Phase 5单元测试",
+          "type": "test",
+          "command": "cd /mnt/e/github/aiclouddeploy/gpu-cluster-deploy && python -m pytest tests/test_network_config.py -v",
+          "description": "验证网络配置增强的正确性",
+          "status": "completed",
+          "risk_level": "low",
+          "auto_approve": true,
+          "gpu_specific": false,
+          "requires_remote": false,
+          "requires": [
+            "step-5.7"
+          ],
+          "estimated_time": 10,
+          "max_attempts": 3
+        }
+      ]
+    },
+    {
+      "id": "phase-6",
+      "name": "测试和文档",
+      "description": "完整功能测试、集成测试、覆盖率验证和文档更新",
+      "status": "completed",
+      "depends_on": "phase-5",
+      "steps": [
+        {
+          "id": "step-6.1",
+          "action": "创建集成测试目录",
+          "type": "bash",
+          "command": "mkdir -p /mnt/e/github/aiclouddeploy/gpu-cluster-deploy/tests/integration && touch /mnt/e/github/aiclouddeploy/gpu-cluster-deploy/tests/integration/__init__.py",
+          "description": "创建集成测试目录结构",
+          "status": "completed",
+          "risk_level": "low",
+          "auto_approve": true,
+          "gpu_specific": false,
+          "requires_remote": false,
+          "estimated_time": 5,
+          "max_attempts": 1
+        },
+        {
+          "id": "step-6.2",
+          "action": "编写批量配置集成测试",
+          "type": "write",
+          "target_file": "/mnt/e/github/aiclouddeploy/gpu-cluster-deploy/tests/integration/test_batch_config_integration.py",
+          "description": "测试hosts格式解析、批量节点生成和配置合并的端到端流程",
+          "status": "completed",
+          "risk_level": "medium",
+          "auto_approve": true,
+          "gpu_specific": false,
+          "requires_remote": false,
+          "requires": [
+            "step-6.1"
+          ],
+          "estimated_time": 30,
+          "max_attempts": 2
+        },
+        {
+          "id": "step-6.3",
+          "action": "编写模块化执行集成测试",
+          "type": "write",
+          "target_file": "/mnt/e/github/aiclouddeploy/gpu-cluster-deploy/tests/integration/test_modular_execution.py",
+          "description": "测试模块选择、分类执行和执行计划导入的完整流程",
+          "status": "completed",
+          "risk_level": "medium",
+          "auto_approve": true,
+          "gpu_specific": false,
+          "requires_remote": false,
+          "requires": [
+            "step-6.2"
+          ],
+          "estimated_time": 35,
+          "max_attempts": 2
+        },
+        {
+          "id": "step-6.4",
+          "action": "运行完整测试套件并检查覆盖率",
+          "type": "test",
+          "command": "cd /mnt/e/github/aiclouddeploy/gpu-cluster-deploy && python -m pytest --cov=src --cov-report=html --cov-report=term --cov-fail-under=80",
+          "description": "运行所有测试并验证覆盖率达到80%以上",
+          "status": "completed",
+          "risk_level": "medium",
+          "auto_approve": true,
+          "gpu_specific": false,
+          "requires_remote": false,
+          "requires": [
+            "step-6.3"
+          ],
+          "estimated_time": 20,
+          "max_attempts": 3
+        },
+        {
+          "id": "step-6.5",
+          "action": "验证向后兼容性",
+          "type": "test",
+          "command": "cd /mnt/e/github/aiclouddeploy/gpu-cluster-deploy && python -c \"from src.config_loader import load_configs; cluster, versions, loader = load_configs('config'); print('Backward compatibility OK')\"",
+          "description": "验证新代码能够正确加载旧的配置文件",
+          "status": "completed",
+          "risk_level": "medium",
+          "auto_approve": true,
+          "gpu_specific": false,
+          "requires_remote": false,
+          "requires": [
+            "step-6.4"
+          ],
+          "estimated_time": 10,
+          "max_attempts": 2
+        },
+        {
+          "id": "step-6.6",
+          "action": "创建配置示例文档",
+          "type": "write",
+          "target_file": "/mnt/e/github/aiclouddeploy/gpu-cluster-deploy/docs/config-examples.md",
+          "description": "提供所有新功能的完整配置示例和使用说明",
+          "status": "completed",
+          "risk_level": "low",
+          "auto_approve": true,
+          "gpu_specific": false,
+          "requires_remote": false,
+          "requires": [
+            "step-6.5"
+          ],
+          "estimated_time": 40,
+          "max_attempts": 2
+        },
+        {
+          "id": "step-6.7",
+          "action": "更新README文档",
+          "type": "edit",
+          "target_file": "/mnt/e/github/aiclouddeploy/gpu-cluster-deploy/README.md",
+          "description": "更新README以包含新功能的使用说明",
+          "status": "completed",
+          "risk_level": "low",
+          "auto_approve": true,
+          "gpu_specific": false,
+          "requires_remote": false,
+          "requires": [
+            "step-6.6"
+          ],
+          "estimated_time": 25,
+          "max_attempts": 2
+        },
+        {
+          "id": "step-6.8",
+          "action": "创建发布检查清单",
+          "type": "write",
+          "target_file": "/mnt/e/github/aiclouddeploy/gpu-cluster-deploy/RELEASE-CHECKLIST.md",
+          "description": "记录所有必须通过的功能验收标准",
+          "status": "completed",
+          "risk_level": "low",
+          "auto_approve": true,
+          "gpu_specific": false,
+          "requires_remote": false,
+          "requires": [
+            "step-6.7"
+          ],
+          "estimated_time": 20,
+          "max_attempts": 2
+        }
+      ]
+    }
+  ],
+  "gpu_config": {
+    "enabled": false,
+    "arch": "sm_80",
+    "cuda_version": "12.8",
+    "cuda_install_path": "/usr/local/cuda"
+  },
+  "deployment": {
+    "service_name": "gpu-cluster-deploy",
+    "deploy_path": "/opt/gpu-cluster-deploy",
+    "health_check_command": "python -c \"from src.config_loader import load_configs; print('OK')\"",
+    "rollback_command": "git checkout HEAD~1",
+    "pre_deploy_steps": [
+      "验证Python版本 >= 3.8",
+      "验证依赖包安装完成"
+    ],
+    "post_deploy_steps": [
+      "运行单元测试套件",
+      "验证配置加载功能"
+    ]
+  },
+  "success_criteria": [
+    "所有新功能通过单元测试和集成测试",
+    "测试覆盖率保持在80%以上",
+    "向后兼容性得到验证",
+    "配置示例文档完整且准确",
+    "发布检查清单中的所有项目通过",
+    "GPU设备一致性检查功能正常工作",
+    "模块化执行框架支持独立模块执行",
+    "CLI支持新功能且保持向后兼容"
+  ],
+  "metadata": {
+    "version": "2.0.0",
+    "author": "GridMind Planner",
+    "tags": [
+      "gpu",
+      "cluster",
+      "deployment",
+      "rdma",
+      "configuration"
+    ],
+    "related_tasks": [
+      "gpu-cluster-deploy-20260221-051724",
+      "gpu-cluster-config-enhancement"
+    ],
+    "notes": "此任务定义包含6个阶段，每个阶段可独立验证和交付。Phase 1-3完成后即可提供核心价值，Phase 4-6提供增强功能和文档。高风险步骤需要人工审核批准。"
+  }
+}

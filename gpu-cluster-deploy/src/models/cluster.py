@@ -23,6 +23,23 @@ class StorageType(Enum):
 
 
 @dataclass
+class NodeAuthConfig:
+    """节点认证配置"""
+    auth_type: str = "key"  # key | password
+    username: str = "ubuntu"
+    private_key: Optional[str] = None
+    password: Optional[str] = None
+
+    def to_dict(self) -> Dict:
+        return {
+            "auth_type": self.auth_type,
+            "username": self.username,
+            "private_key": "***" if self.private_key else None,
+            "password": "***" if self.password else None
+        }
+
+
+@dataclass
 class JumphostConfig:
     """跳转服务器配置"""
     host: str
@@ -31,6 +48,7 @@ class JumphostConfig:
     username: str = "ubuntu"
     private_key: Optional[str] = None
     password: Optional[str] = None
+    node_auth: Optional[NodeAuthConfig] = None  # 用于访问节点的认证配置
 
     def to_dict(self) -> Dict:
         return {
@@ -39,7 +57,8 @@ class JumphostConfig:
             "auth_type": self.auth_type,
             "username": self.username,
             "private_key": "***" if self.private_key else None,
-            "password": "***" if self.password else None
+            "password": "***" if self.password else None,
+            "node_auth": self.node_auth.to_dict() if self.node_auth else None
         }
 
 
@@ -51,6 +70,7 @@ class StorageConfig:
     devices: List[str] = field(default_factory=list)
     mount_point: str = "/ssd"
     filesystem: str = "ext4"
+    format_disk: bool = False  # 是否格式化磁盘（默认不格式化，防止数据丢失）
 
     def to_dict(self) -> Dict:
         return {
@@ -58,7 +78,8 @@ class StorageConfig:
             "device": self.device,
             "devices": self.devices,
             "mount_point": self.mount_point,
-            "filesystem": self.filesystem
+            "filesystem": self.filesystem,
+            "format_disk": self.format_disk
         }
 
 
@@ -126,12 +147,42 @@ class NetworkConfig:
 
 
 @dataclass
+class NodeBatchConfig:
+    """批量节点配置"""
+    enabled: bool = False
+    hosts_file: Optional[str] = None  # hosts格式文件路径
+    hosts_content: Optional[str] = None  # hosts格式内容
+    base_hostname_prefix: str = "node"  # 基础主机名前缀
+    base_ip_prefix: str = "10.0.0"  # 基础IP前缀
+    count: int = 0  # 批量节点数量
+    start_index: int = 1  # 起始索引
+    roles: List[str] = field(default_factory=list)  # 批量节点默认角色
+    storage_template: Optional[StorageConfig] = None  # 存储配置模板
+    auth_template: Optional[NodeAuthConfig] = None  # 认证配置模板
+
+    def to_dict(self) -> Dict:
+        return {
+            "enabled": self.enabled,
+            "hosts_file": self.hosts_file,
+            "hosts_content": self.hosts_content,
+            "base_hostname_prefix": self.base_hostname_prefix,
+            "base_ip_prefix": self.base_ip_prefix,
+            "count": self.count,
+            "start_index": self.start_index,
+            "roles": self.roles,
+            "storage_template": self.storage_template.to_dict() if self.storage_template else None,
+            "auth_template": self.auth_template.to_dict() if self.auth_template else None
+        }
+
+
+@dataclass
 class ClusterConfig:
     """集群配置"""
     name: str = "gpu-cluster"
     description: str = ""
     jumphost: Optional[JumphostConfig] = None
     nodes: List[NodeConfig] = field(default_factory=list)
+    node_batch: NodeBatchConfig = field(default_factory=NodeBatchConfig)  # 批量节点配置
     nfs: NFSConfig = field(default_factory=NFSConfig)
     network: NetworkConfig = field(default_factory=NetworkConfig)
 
@@ -186,6 +237,7 @@ class ClusterConfig:
             "description": self.description,
             "jumphost": self.jumphost.to_dict() if self.jumphost else None,
             "nodes": [node.to_dict() for node in self.nodes],
+            "node_batch": self.node_batch.to_dict(),
             "nfs": self.nfs.to_dict(),
             "network": self.network.to_dict(),
             "node_count": self.node_count

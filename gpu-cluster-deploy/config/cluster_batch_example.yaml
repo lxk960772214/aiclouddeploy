@@ -1,0 +1,211 @@
+# GPU集群部署配置增强示例 - 支持批量节点配置
+# ============================================
+
+# 集群基础配置
+cluster:
+  name: "gpu-cluster-batch-001"
+  description: "支持批量节点配置的GPU集群示例"
+
+# 跳转服务器配置增强
+jumphost:
+  host: "1.2.3.4"           # 公网IP（必填）
+  port: 22                   # SSH端口
+  auth:
+    type: "key"              # key | password
+    username: "ubuntu"
+    private_key: "~/.ssh/id_rsa"
+
+    # 节点认证配置（可选）
+    # 如果配置，将使用此认证访问所有集群节点
+    node_auth:
+      type: "key"
+      username: "ubuntu"
+      private_key: "~/.ssh/id_rsa"
+    # 或密码认证
+    # node_auth:
+    #   type: "password"
+    #   username: "ubuntu"
+    #   password: "your-password"
+
+# 批量节点配置（新功能）
+node_batch:
+  enabled: true              # 启用批量节点配置
+
+  # 方式1：使用hosts文件格式
+  # hosts_file: "/path/to/hosts/file"  # hosts格式文件路径
+
+  # 方式2：直接提供hosts内容
+  hosts_content: |
+    # 批量GPU节点配置
+    10.254.43.66 gpu-node-01
+    10.254.43.67 gpu-node-02
+    10.254.43.68 gpu-node-03
+    10.254.43.69 gpu-node-04
+    10.254.43.70 gpu-node-05
+
+  # 方式3：基于模板生成（如果未使用hosts_file/hosts_content）
+  base_hostname_prefix: "gpu-node-"
+  base_ip_prefix: "10.254.43"
+  count: 5                  # 生成5个节点
+  start_index: 66           # 起始索引为66，生成IP: 10.254.43.66-70
+
+  # 批量节点默认角色
+  roles:
+    - gpu_node
+
+  # 存储配置模板（应用到所有批量节点）
+  storage_template:
+    type: "single"
+    device: "/dev/nvme0n1"   # 批量节点的默认设备
+    mount_point: "/ssd"
+    filesystem: "ext4"
+    format_disk: true        # 是否格式化磁盘（默认false，设为true会格式化）
+
+  # 认证配置模板（可选）
+  auth_template:
+    type: "key"
+    username: "ubuntu"
+    private_key: "~/.ssh/id_rsa"
+
+# 个别节点覆盖配置（新功能）
+# 可以覆盖特定批量节点的配置
+nodes_override:
+  - hostname: "gpu-node-02"
+    storage:
+      device: "/dev/nvme1n1"  # 使用不同的设备
+      format_disk: false      # 特别指定不格式化
+
+  - hostname: "gpu-node-05"
+    roles:
+      - gpu_node
+      - test_node           # 添加额外角色
+
+# 独立节点配置（与批量节点合并）
+nodes:
+  # NFS服务器和Time服务器节点（独立配置）
+  - hostname: "gpu-master"
+    ip: "10.254.43.65"
+    roles:
+      - nfs_server
+      - time_server
+    storage:
+      type: "raid10"         # single | raid1 | raid10
+      devices:
+        - "/dev/nvme0n1"
+        - "/dev/nvme1n1"
+        - "/dev/nvme2n1"
+        - "/dev/nvme3n1"
+      mount_point: "/ssd"
+      filesystem: "ext4"
+      format_disk: true      # 格式化磁盘（注意：默认为false，这里显式设为true）
+
+  # 特殊节点（添加到批量节点之外）
+  - hostname: "cpu-node-01"
+    ip: "10.254.43.71"
+    roles:
+      - cpu_node
+    storage:
+      type: "single"
+      device: "/dev/nvme0n1"
+      mount_point: "/ssd"
+      filesystem: "ext4"
+      format_disk: false     # 不格式化（已有数据）
+
+# 网络配置增强
+network:
+  # IB/RoCE网卡命名规则
+  nics:
+    compute_400g:
+      pattern: "mlx5_[0-7]"
+      count: 8
+      net_prefix: "ib"       # 对应网络设备名 ib0-ib7
+    storage_200g:
+      pattern: "mlx5_[8-9]"
+      count: 2
+      net_prefix: "ib"       # 对应网络设备名 ib8-ib9
+
+  # 新增：设备序列一致性检查配置
+  device_consistency_check:
+    enabled: true
+    check_items:
+      - network_adapters
+      - gpu_cards
+      - nvme_disks
+    tolerance_level: "strict"  # strict | moderate | lenient
+
+  # 新增：网络绑定配置
+  bonding:
+    mode4:
+      nics: ["eth0", "eth1"]
+      mode: "802.3ad"
+      mtu: 9000
+      lacp_rate: "fast"
+    mode1:
+      nics: ["eth2", "eth3"]
+      mode: "active-backup"
+      primary: "eth2"
+
+# NFS配置（可选）
+nfs:
+  enabled: true
+  server: "gpu-master"       # NFS服务器主机名
+  export_path: "/ssd/nfs"    # 服务器导出路径
+  client_mount: "/data"      # 客户端挂载路径
+
+# 时间同步配置
+time_sync:
+  server: "gpu-master"       # 时间服务器主机名
+  timezone: "Asia/Shanghai"
+
+# 用户配置
+users:
+  ubuntu:
+    uid: 1001
+    gid: 1001
+    sudo_nopasswd: true
+    ssh_key_auth: true
+
+# 部署模块配置（新功能）
+deployment_modules:
+  enabled: true
+  modules:
+    - id: "base_system"
+      name: "基础系统配置"
+      enabled: true
+      steps: [1, 2, 3, 4, 5]  # 依赖检查、内核、glibc、openssh、sudo
+
+    - id: "storage_setup"
+      name: "存储设置"
+      enabled: true
+      steps: [6]             # 磁盘挂载（支持格式化）
+      requires: ["base_system"]
+
+    - id: "network_config"
+      name: "网络配置"
+      enabled: true
+      steps: [9, 26, 29]     # 主机名、RDMA重命名、ACS禁用
+      requires: ["base_system"]
+
+    - id: "gpu_stack"
+      name: "GPU软件栈"
+      enabled: true
+      steps: [20, 21, 22, 23, 24, 25, 27, 28]  # MLNX_OFED, NVIDIA驱动等
+      requires: ["base_system"]
+
+    - id: "system_tuning"
+      name: "系统调优"
+      enabled: true
+      steps: [7, 8, 12, 13, 15, 16, 17, 18, 19, 30]  # MSR、rc.local、性能等
+      requires: ["base_system"]
+
+# 跳转服务器认证增强（新功能）
+jumphost_auth_enhancement:
+  enabled: true
+  multi_factor: false
+  certificate_auth: false
+  bastion_mode: true         # 堡垒机模式
+  session_logging: true
+  connection_pooling:
+    enabled: true
+    max_connections: 100
+    idle_timeout: 300

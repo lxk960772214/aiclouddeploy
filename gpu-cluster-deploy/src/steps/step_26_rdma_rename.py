@@ -1,9 +1,18 @@
 """
 步骤26: IB/RoCE网卡重命名
+支持选择性配置和非连续设备映射
 """
 
-from typing import List
+from typing import List, Optional, Dict, Any
 from src.steps.base import BaseStep, StepResult, StepStatus
+
+# 步骤元数据 - 用于模块化执行框架
+STEP_METADATA = {
+    "category": "network",
+    "tags": ["rdma", "network", "rename"],
+    "depends_on": [],
+    "priority": 260,
+}
 
 
 class RDMARename(BaseStep):
@@ -14,6 +23,31 @@ class RDMARename(BaseStep):
     step_description = "统一所有节点的RDMA网卡名称"
     requires_sudo = True
     supports_batch = False
+
+    def __init__(self, config=None, ssh_manager=None, batch_executor=None, logger=None,
+                 rename_config: Optional[Dict[str, Any]] = None):
+        """初始化步骤
+
+        Args:
+            rename_config: 重命名配置，支持:
+                - enabled: 是否启用重命名 (默认True)
+                - create_udev_rules: 是否创建udev规则 (默认True)
+                - skip_if_exists: 如果目标名称已存在则跳过 (默认True)
+                - dry_run: 预览模式 (默认False)
+                - mappings: 自定义映射规则列表
+        """
+        super().__init__(config, ssh_manager, batch_executor, logger)
+        self.rename_config = rename_config or {}
+
+    @property
+    def is_enabled(self) -> bool:
+        """检查重命名是否启用"""
+        return self.rename_config.get("enabled", True)
+
+    @property
+    def is_dry_run(self) -> bool:
+        """检查是否为预览模式"""
+        return self.rename_config.get("dry_run", False)
 
     # RDMA重命名脚本
     RENAME_SCRIPT = '''#!/bin/bash
@@ -94,11 +128,33 @@ log "========== RDMA device rename completed =========="
 '''
 
     def execute(self, hosts: List[str]) -> StepResult:
-        """执行RDMA网卡重命名"""
+        """执行RDMA网卡重命名
+
+        支持选择性配置:
+        - 如果rename_config.enabled为False，跳过执行
+        - 如果rename_config.dry_run为True，只预览不执行
+        - 如果rename_config.mappings有值，使用自定义映射
+        """
+        # 检查是否启用
+        if not self.is_enabled:
+            self.logger.info("RDMA网卡重命名已禁用，跳过")
+            return StepResult(
+                step_id=self.step_id,
+                step_name=self.step_name,
+                status=StepStatus.SKIPPED,
+                message="RDMA网卡重命名已禁用",
+                host_results={}
+            )
+
         results = {}
 
         for host in hosts:
             self.logger.info(f"[{host}] 开始RDMA网卡重命名...")
+
+            # 预览模式
+            if self.is_dry_run:
+                results[host] = {"success": True, "dry_run": True, "message": "预览模式，未执行实际重命名"}
+                continue
 
             # 1. 上传重命名脚本
             script_path = "/usr/local/bin/rdma-rename.sh"

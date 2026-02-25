@@ -24,9 +24,10 @@ class DiskMount(BaseStep):
                 return node.storage
         return None
 
-    def _mount_single_disk(self, host: str, device: str, mount_point: str) -> Dict[str, Any]:
+    def _mount_single_disk(self, host: str, device: str, mount_point: str, filesystem: str = "ext4", format_disk: bool = True) -> Dict[str, Any]:
         """单盘挂载"""
         results = {}
+        results["format_disk"] = format_disk
 
         # 1. 检查设备是否存在
         check_cmd = f"ls -la {device}"
@@ -34,42 +35,84 @@ class DiskMount(BaseStep):
         if not check_result["success"]:
             return {"success": False, "error": f"设备 {device} 不存在"}
 
-        # 2. 格式化设备
-        format_cmd = f"mkfs.ext4 -F {device}"
-        format_result = self.execute_on_host(host, format_cmd, sudo=True)
-        results["format"] = format_result
+        # 2. 获取设备信息（检查是否已格式化）
+        blkid_cmd = f"blkid {device}"
+        blkid_result = self.execute_on_host(host, blkid_cmd, sudo=True)
+        is_formatted = blkid_result["success"]
+        results["already_formatted"] = is_formatted
 
-        # 3. 获取UUID
+        uuid = None
+        # 3. 条件格式化
+        if format_disk and not is_formatted:
+            self.logger.info(f"[{host}] 格式化设备 {device} 为 {filesystem}")
+            format_cmd = f"mkfs.{filesystem} -F {device}"
+            format_result = self.execute_on_host(host, format_cmd, sudo=True)
+            results["format"] = format_result
+
+            if not format_result["success"]:
+                return {"success": False, "error": f"格式化设备 {device} 失败", "results": results}
+        elif format_disk and is_formatted:
+            self.logger.warning(f"[{host}] 设备 {device} 已格式化，跳过格式化步骤")
+            results["format"] = {"success": True, "message": "已格式化，跳过"}
+        elif not format_disk:
+            self.logger.info(f"[{host}] 配置为不格式化设备 {device}")
+            results["format"] = {"success": True, "message": "配置不格式化，跳过"}
+
+        # 4. 获取UUID（格式化后或已有）
         uuid_cmd = f"blkid {device} -s UUID -o value"
         uuid_result = self.execute_on_host(host, uuid_cmd, sudo=True)
         if not uuid_result["success"]:
-            return {"success": False, "error": "获取UUID失败", "results": results}
+            # 如果配置不格式化且没有UUID，尝试使用设备路径
+            if not format_disk:
+                self.logger.info(f"[{host}] 使用设备路径 {device} 代替UUID")
+                uuid = device
+            else:
+                return {"success": False, "error": "获取UUID失败", "results": results}
+        else:
+            uuid = uuid_result["stdout"].strip()
 
-        uuid = uuid_result["stdout"].strip()
         results["uuid"] = uuid
 
-        # 4. 创建挂载点
+        # 5. 创建挂载点
         mkdir_cmd = f"mkdir -p {mount_point}"
         mkdir_result = self.execute_on_host(host, mkdir_cmd, sudo=True)
         results["mkdir"] = mkdir_result
 
-        # 5. 添加到fstab
-        fstab_entry = f"UUID={uuid} {mount_point} ext4 defaults,nofail 0 0"
-        # 检查是否已存在
-        check_fstab = f"grep '{fstab_entry}' /etc/fstab"
-        check_result = self.execute_on_host(host, check_fstab, sudo=True)
+        # 6. 检查现有挂载
+        check_mount_cmd = f"mount | grep '{mount_point}'"
+        check_mount_result = self.execute_on_host(host, check_mount_cmd)
+        is_mounted = check_mount_result["success"]
+        results["already_mounted"] = is_mounted
 
-        if not check_result["success"]:
-            add_fstab_cmd = f"echo '{fstab_entry}' >> /etc/fstab"
-            add_result = self.execute_on_host(host, add_fstab_cmd, sudo=True)
-            results["fstab"] = add_result
+        if is_mounted:
+            self.logger.info(f"[{host}] {mount_point} 已挂载，先卸载")
+            umount_cmd = f"umount {mount_point}"
+            self.execute_on_host(host, umount_cmd, sudo=True)
 
-        # 6. 挂载
+        # 7. 添加到fstab
+        fstab_entry = f"{uuid} {mount_point} {filesystem} defaults,nofail 0 0" if format_disk or uuid != device else f"{device} {mount_point} {filesystem} defaults,nofail 0 0"
+
+        # 检查是否已存在相同的挂载点条目
+        check_fstab_mount_cmd = f"grep -E '^[^#]*{mount_point}[[:space:]]' /etc/fstab"
+        check_fstab_mount_result = self.execute_on_host(host, check_fstab_mount_cmd, sudo=True)
+
+        if check_fstab_mount_result["success"]:
+            # 移除现有条目
+            self.logger.info(f"[{host}] 移除现有fstab条目: {mount_point}")
+            temp_cmd = f"grep -v -E '^[^#]*{mount_point}[[:space:]]' /etc/fstab > /tmp/fstab.tmp && cat /tmp/fstab.tmp > /etc/fstab && rm /tmp/fstab.tmp"
+            self.execute_on_host(host, temp_cmd, sudo=True)
+
+        # 添加新条目
+        add_fstab_cmd = f"echo '{fstab_entry}' >> /etc/fstab"
+        add_result = self.execute_on_host(host, add_fstab_cmd, sudo=True)
+        results["fstab"] = add_result
+
+        # 8. 挂载
         mount_cmd = "mount -a"
         mount_result = self.execute_on_host(host, mount_cmd, sudo=True)
         results["mount"] = mount_result
 
-        # 7. 验证
+        # 9. 验证
         verify_cmd = f"df -h {mount_point}"
         verify_result = self.execute_on_host(host, verify_cmd)
         results["verify"] = verify_result
@@ -80,9 +123,10 @@ class DiskMount(BaseStep):
         }
 
     def _mount_raid(self, host: str, devices: List[str], raid_level: int,
-                    mount_point: str) -> Dict[str, Any]:
+                    mount_point: str, filesystem: str = "ext4", format_disk: bool = True) -> Dict[str, Any]:
         """RAID挂载"""
         results = {}
+        results["format_disk"] = format_disk
         raid_device = "/dev/md0"
 
         # 1. 检查所有设备
@@ -92,50 +136,122 @@ class DiskMount(BaseStep):
             if not check_result["success"]:
                 return {"success": False, "error": f"设备 {dev} 不存在"}
 
-        # 2. 清除现有分区表（可选，需谨慎）
+        # 2. 检查RAID是否已存在
+        check_raid_cmd = f"mdadm --detail {raid_device} 2>/dev/null || true"
+        check_raid_result = self.execute_on_host(host, check_raid_cmd, sudo=True)
+        raid_exists = "State :" in check_raid_result.get("stdout", "")
+
+        if raid_exists:
+            self.logger.info(f"[{host}] RAID设备 {raid_device} 已存在")
+            results["raid_exists"] = True
+
+            if format_disk:
+                self.logger.warning(f"[{host}] RAID已存在，但配置要求格式化。先停止RAID")
+                stop_cmd = f"mdadm --stop {raid_device}"
+                self.execute_on_host(host, stop_cmd, sudo=True)
+                raid_exists = False
+        else:
+            results["raid_exists"] = False
+
+        # 3. 清除现有分区表（可选，需谨慎）
         # 这里不自动执行，需要用户确认
 
-        # 3. 创建RAID
-        devices_str = " ".join(devices)
-        create_cmd = f"mdadm --create {raid_device} --level={raid_level} --raid-devices={len(devices)} {devices_str} --force"
-        create_result = self.execute_on_host(host, create_cmd, sudo=True)
-        results["create_raid"] = create_result
+        # 4. 创建RAID（如果不存在）
+        if not raid_exists:
+            devices_str = " ".join(devices)
+            create_cmd = f"mdadm --create {raid_device} --level={raid_level} --raid-devices={len(devices)} {devices_str} --force"
+            create_result = self.execute_on_host(host, create_cmd, sudo=True)
+            results["create_raid"] = create_result
 
-        if not create_result["success"]:
-            return {"success": False, "error": "RAID创建失败", "results": results}
+            if not create_result["success"]:
+                return {"success": False, "error": "RAID创建失败", "results": results}
 
-        # 4. 保存RAID配置
-        save_cmd = "mdadm --detail --scan >> /etc/mdadm/mdadm.conf"
-        save_result = self.execute_on_host(host, save_cmd, sudo=True)
-        results["save_raid"] = save_result
+            # 保存RAID配置
+            save_cmd = "mkdir -p /etc/mdadm && mdadm --detail --scan >> /etc/mdadm/mdadm.conf"
+            save_result = self.execute_on_host(host, save_cmd, sudo=True)
+            results["save_raid"] = save_result
+        else:
+            self.logger.info(f"[{host}] 使用现有RAID设备 {raid_device}")
+            results["create_raid"] = {"success": True, "message": "使用现有RAID"}
+            results["save_raid"] = {"success": True, "message": "RAID配置已存在"}
 
-        # 5. 格式化
-        format_cmd = f"mkfs.ext4 -F {raid_device}"
-        format_result = self.execute_on_host(host, format_cmd, sudo=True)
-        results["format"] = format_result
+        # 5. 检查RAID是否已格式化
+        blkid_cmd = f"blkid {raid_device}"
+        blkid_result = self.execute_on_host(host, blkid_cmd, sudo=True)
+        is_formatted = blkid_result["success"]
+        results["already_formatted"] = is_formatted
 
-        # 6. 获取UUID并挂载
+        uuid = None
+        # 6. 条件格式化
+        if format_disk and not is_formatted:
+            self.logger.info(f"[{host}] 格式化RAID设备 {raid_device} 为 {filesystem}")
+            format_cmd = f"mkfs.{filesystem} -F {raid_device}"
+            format_result = self.execute_on_host(host, format_cmd, sudo=True)
+            results["format"] = format_result
+
+            if not format_result["success"]:
+                return {"success": False, "error": f"格式化RAID设备 {raid_device} 失败", "results": results}
+        elif format_disk and is_formatted:
+            self.logger.warning(f"[{host}] RAID设备 {raid_device} 已格式化，跳过格式化步骤")
+            results["format"] = {"success": True, "message": "已格式化，跳过"}
+        elif not format_disk:
+            self.logger.info(f"[{host}] 配置为不格式化RAID设备 {raid_device}")
+            results["format"] = {"success": True, "message": "配置不格式化，跳过"}
+
+        # 7. 获取UUID（格式化后或已有）
         uuid_cmd = f"blkid {raid_device} -s UUID -o value"
         uuid_result = self.execute_on_host(host, uuid_cmd, sudo=True)
-
-        if uuid_result["success"]:
+        if not uuid_result["success"]:
+            if not format_disk:
+                self.logger.info(f"[{host}] 使用RAID设备路径 {raid_device} 代替UUID")
+                uuid = raid_device
+            else:
+                return {"success": False, "error": "获取RAID UUID失败", "results": results}
+        else:
             uuid = uuid_result["stdout"].strip()
-            results["uuid"] = uuid
 
-            # 创建挂载点
-            mkdir_cmd = f"mkdir -p {mount_point}"
-            self.execute_on_host(host, mkdir_cmd, sudo=True)
+        results["uuid"] = uuid
 
-            # 添加到fstab
-            fstab_entry = f"UUID={uuid} {mount_point} ext4 defaults,nofail 0 0"
-            add_fstab_cmd = f"echo '{fstab_entry}' >> /etc/fstab"
-            self.execute_on_host(host, add_fstab_cmd, sudo=True)
+        # 8. 创建挂载点
+        mkdir_cmd = f"mkdir -p {mount_point}"
+        mkdir_result = self.execute_on_host(host, mkdir_cmd, sudo=True)
+        results["mkdir"] = mkdir_result
 
-            # 挂载
-            mount_cmd = "mount -a"
-            self.execute_on_host(host, mount_cmd, sudo=True)
+        # 9. 检查现有挂载
+        check_mount_cmd = f"mount | grep '{mount_point}'"
+        check_mount_result = self.execute_on_host(host, check_mount_cmd)
+        is_mounted = check_mount_result["success"]
+        results["already_mounted"] = is_mounted
 
-        # 7. 验证
+        if is_mounted:
+            self.logger.info(f"[{host}] {mount_point} 已挂载，先卸载")
+            umount_cmd = f"umount {mount_point}"
+            self.execute_on_host(host, umount_cmd, sudo=True)
+
+        # 10. 添加到fstab
+        fstab_entry = f"{uuid} {mount_point} {filesystem} defaults,nofail 0 0" if format_disk or uuid != raid_device else f"{raid_device} {mount_point} {filesystem} defaults,nofail 0 0"
+
+        # 检查是否已存在相同的挂载点条目
+        check_fstab_mount_cmd = f"grep -E '^[^#]*{mount_point}[[:space:]]' /etc/fstab"
+        check_fstab_mount_result = self.execute_on_host(host, check_fstab_mount_cmd, sudo=True)
+
+        if check_fstab_mount_result["success"]:
+            # 移除现有条目
+            self.logger.info(f"[{host}] 移除现有fstab条目: {mount_point}")
+            temp_cmd = f"grep -v -E '^[^#]*{mount_point}[[:space:]]' /etc/fstab > /tmp/fstab.tmp && cat /tmp/fstab.tmp > /etc/fstab && rm /tmp/fstab.tmp"
+            self.execute_on_host(host, temp_cmd, sudo=True)
+
+        # 添加新条目
+        add_fstab_cmd = f"echo '{fstab_entry}' >> /etc/fstab"
+        add_result = self.execute_on_host(host, add_fstab_cmd, sudo=True)
+        results["fstab"] = add_result
+
+        # 11. 挂载
+        mount_cmd = "mount -a"
+        mount_result = self.execute_on_host(host, mount_cmd, sudo=True)
+        results["mount"] = mount_result
+
+        # 12. 验证
         verify_cmd = f"df -h {mount_point}"
         verify_result = self.execute_on_host(host, verify_cmd)
         results["verify"] = verify_result
@@ -167,11 +283,17 @@ class DiskMount(BaseStep):
             self.logger.info(f"[{host}] 配置存储: {storage.type}")
 
             try:
+                # 获取文件系统和格式化选项
+                filesystem = storage.filesystem if hasattr(storage, 'filesystem') else "ext4"
+                format_disk = storage.format_disk if hasattr(storage, 'format_disk') else False
+
                 if storage.type == StorageType.SINGLE.value or storage.type == "single":
                     result = self._mount_single_disk(
                         host,
                         storage.device,
-                        storage.mount_point
+                        storage.mount_point,
+                        filesystem,
+                        format_disk
                     )
                 elif storage.type in [StorageType.RAID1.value, StorageType.RAID10.value, "raid1", "raid10"]:
                     raid_level = 1 if storage.type in ["raid1", StorageType.RAID1.value] else 10
@@ -179,7 +301,9 @@ class DiskMount(BaseStep):
                         host,
                         storage.devices,
                         raid_level,
-                        storage.mount_point
+                        storage.mount_point,
+                        filesystem,
+                        format_disk
                     )
                 else:
                     result = {"success": False, "error": f"未知存储类型: {storage.type}"}

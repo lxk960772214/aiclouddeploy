@@ -1,0 +1,403 @@
+# Full GPU Cluster Deployment Execution Plan
+# This is a comprehensive plan that includes all deployment phases
+
+name: full-gpu-cluster-deployment
+version: "1.0.0"
+description: "Complete GPU cluster deployment including system setup, storage, network, and GPU configuration"
+author: "GPU Cluster Deploy"
+created_at: "2026-02-25"
+
+# Global configuration applied to all modules
+global_config:
+  log_level: INFO
+  continue_on_failure: false
+  timeout_multiplier: 1.0
+
+# Module groups for organized execution
+groups:
+  - name: system-checks
+    description: "Initial system validation and dependency installation"
+    modules:
+      - device-check
+      - dependencies
+      - kernel-check
+      - glibc-check
+      - openssh-check
+    parallel: false
+    stop_on_failure: true
+
+  - name: base-config
+    description: "Base system configuration"
+    modules:
+      - sudo-nopasswd
+      - disk-mount
+      - msr-settings
+      - rc-local
+      - hostname-hosts
+    parallel: false
+    stop_on_failure: true
+
+  - name: security
+    description: "Security and user configuration"
+    modules:
+      - create-user
+      - ssh-key-setup
+      - cpu-performance
+      - file-limits
+    parallel: false
+    stop_on_failure: true
+
+  - name: system-optimization
+    description: "System optimization and tuning"
+    modules:
+      - disable-autoupdate
+      - lock-kernel
+      - timezone-setup
+      - disable-ipv6
+      - vmcore-hibernate
+    parallel: false
+    stop_on_failure: true
+
+  - name: network-drivers
+    description: "Network and RDMA driver installation"
+    modules:
+      - mellanox-driver
+      - disable-nouveau
+      - nvidia-driver
+      - fabric-manager
+    parallel: false
+    stop_on_failure: true
+
+  - name: gpu-environment
+    description: "GPU environment setup"
+    modules:
+      - cuda-toolkit
+      - nccl-install
+      - rdma-rename
+      - gpu-persistence
+      - nvidia-modules
+    parallel: false
+    stop_on_failure: true
+
+  - name: advanced-config
+    description: "Advanced configuration"
+    modules:
+      - disable-acs
+      - time-sync
+      - nfs-config
+    parallel: false
+    stop_on_failure: true
+
+# Individual module definitions
+modules:
+  # Phase 0: Device Check
+  - name: device-check
+    module_class: step_0
+    category: system
+    enabled: true
+    config:
+      check_rdma: true
+      check_ethernet: true
+      check_gpu: true
+    depends_on: []
+    timeout: 600
+
+  # Phase A: System Checks
+  - name: dependencies
+    module_class: step_1
+    category: system
+    enabled: true
+    config: {}
+    depends_on:
+      - device-check
+    timeout: 600
+
+  - name: kernel-check
+    module_class: step_2
+    category: system
+    enabled: true
+    config: {}
+    depends_on:
+      - dependencies
+    timeout: 300
+
+  - name: glibc-check
+    module_class: step_3
+    category: system
+    enabled: true
+    config: {}
+    depends_on:
+      - dependencies
+    timeout: 180
+
+  - name: openssh-check
+    module_class: step_4
+    category: system
+    enabled: true
+    config: {}
+    depends_on:
+      - dependencies
+    timeout: 180
+
+  # Phase B: Base Configuration
+  - name: sudo-nopasswd
+    module_class: step_5
+    category: security
+    enabled: true
+    config: {}
+    depends_on:
+      - kernel-check
+    timeout: 180
+
+  - name: disk-mount
+    module_class: step_6
+    category: storage
+    enabled: true
+    config:
+      format_disk: false
+    depends_on:
+      - sudo-nopasswd
+    timeout: 600
+
+  - name: msr-settings
+    module_class: step_7
+    category: system
+    enabled: true
+    config: {}
+    depends_on:
+      - sudo-nopasswd
+    timeout: 180
+
+  - name: rc-local
+    module_class: step_8
+    category: system
+    enabled: true
+    config: {}
+    depends_on:
+      - sudo-nopasswd
+    timeout: 180
+
+  - name: hostname-hosts
+    module_class: step_9
+    category: system
+    enabled: true
+    config: {}
+    depends_on:
+      - sudo-nopasswd
+    timeout: 180
+
+  # Phase C: Security
+  - name: create-user
+    module_class: step_10
+    category: security
+    enabled: true
+    config: {}
+    depends_on:
+      - hostname-hosts
+    timeout: 180
+
+  - name: ssh-key-setup
+    module_class: step_11
+    category: security
+    enabled: true
+    config: {}
+    depends_on:
+      - create-user
+    timeout: 180
+
+  - name: cpu-performance
+    module_class: step_12
+    category: system
+    enabled: true
+    config: {}
+    depends_on:
+      - ssh-key-setup
+    timeout: 180
+
+  - name: file-limits
+    module_class: step_13
+    category: system
+    enabled: true
+    config: {}
+    depends_on:
+      - ssh-key-setup
+    timeout: 180
+
+  # Phase D: System Optimization
+  - name: disable-autoupdate
+    module_class: step_15
+    category: system
+    enabled: true
+    config: {}
+    depends_on:
+      - file-limits
+    timeout: 180
+
+  - name: lock-kernel
+    module_class: step_16
+    category: system
+    enabled: true
+    config: {}
+    depends_on:
+      - disable-autoupdate
+    timeout: 180
+
+  - name: timezone-setup
+    module_class: step_17
+    category: system
+    enabled: true
+    config:
+      timezone: "Asia/Shanghai"
+    depends_on:
+      - disable-autoupdate
+    timeout: 180
+
+  - name: disable-ipv6
+    module_class: step_18
+    category: network
+    enabled: false  # Optional, may not be needed
+    config: {}
+    depends_on:
+      - disable-autoupdate
+    timeout: 180
+
+  - name: vmcore-hibernate
+    module_class: step_19
+    category: system
+    enabled: true
+    config: {}
+    depends_on:
+      - disable-autoupdate
+    timeout: 180
+
+  # Phase E: Network Drivers
+  - name: mellanox-driver
+    module_class: step_20
+    category: network
+    enabled: true
+    config: {}
+    depends_on:
+      - vmcore-hibernate
+    timeout: 900
+
+  - name: disable-nouveau
+    module_class: step_21
+    category: gpu
+    enabled: true
+    config: {}
+    depends_on:
+      - vmcore-hibernate
+    timeout: 300
+
+  - name: nvidia-driver
+    module_class: step_22
+    category: gpu
+    enabled: true
+    config:
+      driver_version: "535"
+    depends_on:
+      - disable-nouveau
+    timeout: 900
+
+  - name: fabric-manager
+    module_class: step_23
+    category: gpu
+    enabled: true
+    config: {}
+    depends_on:
+      - nvidia-driver
+    timeout: 300
+
+  # Phase F: GPU Environment
+  - name: cuda-toolkit
+    module_class: step_24
+    category: gpu
+    enabled: true
+    config:
+      cuda_version: "12.2"
+    depends_on:
+      - nvidia-driver
+    timeout: 1200
+
+  - name: nccl-install
+    module_class: step_25
+    category: gpu
+    enabled: true
+    config: {}
+    depends_on:
+      - cuda-toolkit
+    timeout: 600
+
+  - name: rdma-rename
+    module_class: step_26
+    category: network
+    enabled: true
+    config: {}
+    depends_on:
+      - mellanox-driver
+    timeout: 300
+
+  - name: gpu-persistence
+    module_class: step_27
+    category: gpu
+    enabled: true
+    config: {}
+    depends_on:
+      - nvidia-driver
+    timeout: 180
+
+  - name: nvidia-modules
+    module_class: step_28
+    category: gpu
+    enabled: true
+    config: {}
+    depends_on:
+      - nvidia-driver
+    timeout: 180
+
+  # Phase G: Advanced Configuration
+  - name: disable-acs
+    module_class: step_29
+    category: system
+    enabled: false  # Advanced, usually not needed
+    config: {}
+    depends_on:
+      - nvidia-modules
+    timeout: 300
+
+  - name: time-sync
+    module_class: step_30
+    category: system
+    enabled: true
+    config: {}
+    depends_on:
+      - nvidia-modules
+    timeout: 180
+
+  - name: nfs-config
+    module_class: step_34
+    category: storage
+    enabled: true
+    config: {}
+    depends_on:
+      - time-sync
+    timeout: 300
+
+# Execution order (auto-resolved if not specified)
+execution_order: []
+
+# Additional metadata
+metadata:
+  tags:
+    - full
+    - gpu
+    - cluster
+    - deployment
+  estimated_time_minutes: 120
+  risk_level: high
+  requires_reboot: true
+  notes: |
+    This is a complete deployment plan for GPU clusters.
+    It includes all phases from system checks to GPU configuration.
+    Make sure to review and adjust the plan based on your specific requirements.
+    Some modules are disabled by default (disable-ipv6, disable-acs) as they may not be needed.

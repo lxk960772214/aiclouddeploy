@@ -1,8 +1,86 @@
 """
 部署步骤模块
+
+步骤分类说明:
+- SYSTEM: 系统配置 (内核、依赖、系统设置)
+- STORAGE: 存储配置 (磁盘挂载、NFS)
+- NETWORK: 网络配置 (RDMA、网络驱动)
+- GPU: GPU配置 (驱动、CUDA、GPU工具)
+- SECURITY: 安全配置 (用户、SSH密钥)
 """
 
 from .base import BaseStep, StepResult, StepStatus
+
+# Step categories for module framework
+from enum import Enum
+
+
+class StepCategory(Enum):
+    """Step categories for modular execution."""
+    SYSTEM = "system"
+    STORAGE = "storage"
+    NETWORK = "network"
+    GPU = "gpu"
+    SECURITY = "security"
+    MONITORING = "monitoring"
+    CUSTOM = "custom"
+
+
+# Step metadata including category and tags
+STEP_METADATA = {
+    # Group A: System checks
+    "step_1": {"category": StepCategory.SYSTEM, "tags": ["dependencies", "prerequisites"]},
+    "step_2": {"category": StepCategory.SYSTEM, "tags": ["kernel", "os"]},
+    "step_3": {"category": StepCategory.SYSTEM, "tags": ["glibc", "libraries"]},
+    "step_4": {"category": StepCategory.SYSTEM, "tags": ["ssh", "network"]},
+    # Group B: Base configuration
+    "step_5": {"category": StepCategory.SECURITY, "tags": ["sudo", "permissions"]},
+    "step_6": {"category": StepCategory.STORAGE, "tags": ["disk", "mount", "format"]},
+    "step_7": {"category": StepCategory.SYSTEM, "tags": ["msr", "cpu"]},
+    "step_8": {"category": StepCategory.SYSTEM, "tags": ["startup", "rc-local"]},
+    "step_9": {"category": StepCategory.SYSTEM, "tags": ["hostname", "hosts", "network"]},
+    # Group C: User and SSH
+    "step_10": {"category": StepCategory.SECURITY, "tags": ["user", "account"]},
+    "step_11": {"category": StepCategory.SECURITY, "tags": ["ssh", "keys", "auth"]},
+    "step_12": {"category": StepCategory.SYSTEM, "tags": ["cpu", "performance"]},
+    "step_13": {"category": StepCategory.SYSTEM, "tags": ["limits", "ulimit"]},
+    # Group D: System optimization
+    "step_15": {"category": StepCategory.SYSTEM, "tags": ["update", "package"]},
+    "step_16": {"category": StepCategory.SYSTEM, "tags": ["kernel", "lock"]},
+    "step_17": {"category": StepCategory.SYSTEM, "tags": ["timezone", "time"]},
+    "step_18": {"category": StepCategory.NETWORK, "tags": ["ipv6", "network"]},
+    "step_19": {"category": StepCategory.SYSTEM, "tags": ["vmcore", "crash"]},
+    # Group E: Network drivers
+    "step_20": {"category": StepCategory.NETWORK, "tags": ["rdma", "mlnx", "ofed"]},
+    "step_21": {"category": StepCategory.GPU, "tags": ["nvidia", "nouveau", "driver"]},
+    "step_22": {"category": StepCategory.GPU, "tags": ["nvidia", "driver", "gpu"]},
+    "step_23": {"category": StepCategory.GPU, "tags": ["fabric", "nvlink", "gpu"]},
+    # Group F: GPU environment
+    "step_24": {"category": StepCategory.GPU, "tags": ["cuda", "toolkit", "gpu"]},
+    "step_25": {"category": StepCategory.GPU, "tags": ["nccl", "gpu", "communication"]},
+    "step_26": {"category": StepCategory.NETWORK, "tags": ["rdma", "rename", "network"]},
+    "step_27": {"category": StepCategory.GPU, "tags": ["persistence", "gpu", "daemon"]},
+    "step_28": {"category": StepCategory.GPU, "tags": ["nvidia", "modules", "kernel"]},
+    # Group G: Advanced config
+    "step_29": {"category": StepCategory.SYSTEM, "tags": ["acs", "pci", "iommu"]},
+    "step_30": {"category": StepCategory.SYSTEM, "tags": ["time", "sync", "ntp"]},
+    "step_34": {"category": StepCategory.STORAGE, "tags": ["nfs", "mount", "storage"]},
+    # Device check (step_0)
+    "step_0": {"category": StepCategory.SYSTEM, "tags": ["device", "check", "validation"]},
+}
+
+
+def get_step_category(step_id: str) -> StepCategory:
+    """Get the category for a step by its ID."""
+    meta = STEP_METADATA.get(step_id, {})
+    return meta.get("category", StepCategory.CUSTOM)
+
+
+def get_step_tags(step_id: str) -> list:
+    """Get the tags for a step by its ID."""
+    meta = STEP_METADATA.get(step_id, {})
+    return meta.get("tags", [])
+
 
 # Group A: 系统检查类
 from .step_1_dependencies import InstallDependencies
@@ -48,9 +126,14 @@ from .step_29_disable_acs import DisableACS
 from .step_30_time_sync import TimeSync
 from .step_34_nfs_config import NFSConfig
 
+# Device check step
+from .step_0_device_check import Step0DeviceCheck
+
 
 # 所有步骤类
 ALL_STEPS = [
+    # Device check (run first)
+    Step0DeviceCheck,
     # Group A
     InstallDependencies,
     KernelCheck,
@@ -96,7 +179,10 @@ STEP_MAP = {step.step_id: step for step in ALL_STEPS}
 
 __all__ = [
     'BaseStep', 'StepResult', 'StepStatus',
+    'StepCategory', 'STEP_METADATA', 'get_step_category', 'get_step_tags',
     'ALL_STEPS', 'STEP_MAP',
+    # Device check
+    'Step0DeviceCheck',
     # Group A
     'InstallDependencies', 'KernelCheck', 'KernelInstall', 'GlibcCheck', 'OpenSSHCheck',
     # Group B

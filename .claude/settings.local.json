@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls -la *.py 2>/dev/null)",
+      "Bash(git add gpu-cluster-deploy/ .gridmind/ && git status)",
+      "Bash(cd /mnt/e/github/aiclouddeploy/gpu-cluster-deploy && python test_disk_mount.py)"
+    ]
+  }
+}

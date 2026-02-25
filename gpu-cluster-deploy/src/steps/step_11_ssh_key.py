@@ -29,7 +29,7 @@ fi
 chmod 700 ~/.ssh
 cat ~/.ssh/id_rsa.pub >> ~/.ssh/authorized_keys
 chmod 600 ~/.ssh/authorized_keys
-''''
+' '''
         keygen_result = self.execute_batch(hosts, keygen_cmd, sudo=True)
 
         # 2. 收集所有节点的公钥
@@ -65,7 +65,7 @@ EOF
     fi
 done
 chmod 600 ~/.ssh/authorized_keys
-''''
+' '''
             add_result = self.execute_on_host(host, add_keys_cmd, sudo=True)
             results[host] = {"success": add_result["success"]}
 

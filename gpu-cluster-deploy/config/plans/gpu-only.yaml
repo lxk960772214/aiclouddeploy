@@ -1,0 +1,139 @@
+# GPU-Only Deployment Execution Plan
+# This plan focuses on GPU-related modules only
+
+name: gpu-only-deployment
+version: "1.0.0"
+description: "GPU-focused deployment plan for clusters with pre-configured OS and network"
+author: "GPU Cluster Deploy"
+created_at: "2026-02-25"
+
+# Global configuration applied to all modules
+global_config:
+  log_level: INFO
+  continue_on_failure: false
+  timeout_multiplier: 1.0
+
+# Module groups for organized execution
+groups:
+  - name: gpu-drivers
+    description: "GPU driver installation and configuration"
+    modules:
+      - disable-nouveau
+      - nvidia-driver
+      - fabric-manager
+    parallel: false
+    stop_on_failure: true
+
+  - name: gpu-tools
+    description: "CUDA toolkit and GPU communication libraries"
+    modules:
+      - cuda-toolkit
+      - nccl-install
+    parallel: false
+    stop_on_failure: true
+
+  - name: gpu-config
+    description: "GPU persistence and kernel modules"
+    modules:
+      - gpu-persistence
+      - nvidia-modules
+    parallel: false
+    stop_on_failure: true
+
+# Individual module definitions
+modules:
+  # Disable Nouveau driver (required before NVIDIA driver)
+  - name: disable-nouveau
+    module_class: step_21
+    category: gpu
+    enabled: true
+    config: {}
+    depends_on: []
+    timeout: 300
+
+  # Install NVIDIA Driver
+  - name: nvidia-driver
+    module_class: step_22
+    category: gpu
+    enabled: true
+    config:
+      driver_version: "535"
+    depends_on:
+      - disable-nouveau
+    timeout: 600
+
+  # Install Fabric Manager (for NVLink)
+  - name: fabric-manager
+    module_class: step_23
+    category: gpu
+    enabled: true
+    config: {}
+    depends_on:
+      - nvidia-driver
+    timeout: 300
+
+  # Install CUDA Toolkit
+  - name: cuda-toolkit
+    module_class: step_24
+    category: gpu
+    enabled: true
+    config:
+      cuda_version: "12.2"
+    depends_on:
+      - nvidia-driver
+    timeout: 900
+
+  # Install NCCL for multi-GPU communication
+  - name: nccl-install
+    module_class: step_25
+    category: gpu
+    enabled: true
+    config: {}
+    depends_on:
+      - cuda-toolkit
+    timeout: 600
+
+  # Enable GPU Persistence Mode
+  - name: gpu-persistence
+    module_class: step_27
+    category: gpu
+    enabled: true
+    config: {}
+    depends_on:
+      - nvidia-driver
+    timeout: 180
+
+  # Load NVIDIA Kernel Modules
+  - name: nvidia-modules
+    module_class: step_28
+    category: gpu
+    enabled: true
+    config: {}
+    depends_on:
+      - nvidia-driver
+    timeout: 180
+
+# Execution order (auto-resolved if not specified)
+# This explicit order ensures proper dependency resolution
+execution_order:
+  - disable-nouveau
+  - nvidia-driver
+  - fabric-manager
+  - cuda-toolkit
+  - nccl-install
+  - gpu-persistence
+  - nvidia-modules
+
+# Additional metadata
+metadata:
+  tags:
+    - gpu
+    - nvidia
+    - cuda
+  estimated_time_minutes: 45
+  risk_level: medium
+  requires_reboot: false
+  notes: |
+    This plan assumes the base OS is already configured.
+    It will install NVIDIA drivers, CUDA toolkit, and configure GPU settings.
+    Make sure all nodes have compatible GPUs before running this plan.

@@ -2,6 +2,10 @@
 """
 GPU Cluster Deploy - 主入口
 自动化GPU集群环境部署工具
+
+支持两种CLI模式:
+1. 传统模式: python main.py [options] - 兼容原有参数
+2. 新模式: python main.py --new-cli [options] - 支持模块选择、分类执行等新功能
 """
 
 import argparse
@@ -17,7 +21,7 @@ from src.steps.base import StepResult
 
 
 def parse_args():
-    """解析命令行参数"""
+    """解析命令行参数（传统模式，保持向后兼容）"""
     parser = argparse.ArgumentParser(
         description="GPU集群环境部署工具",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -40,7 +44,20 @@ def parse_args():
 
   # 生成部署报告
   python main.py --report-only
+
+  # 使用新CLI模式（支持模块选择、分类执行等）
+  python main.py --new-cli --category storage --category gpu
+
+  # 从执行计划文件执行
+  python main.py --new-cli --plan config/plans/gpu-only.yaml
         """
+    )
+
+    # 新CLI模式开关
+    parser.add_argument(
+        "--new-cli",
+        action="store_true",
+        help="使用新CLI模式（支持模块选择、分类执行、计划文件等）"
     )
 
     parser.add_argument(
@@ -85,6 +102,54 @@ def parse_args():
         "--log-dir",
         default="logs",
         help="日志目录 (默认: logs)"
+    )
+
+    # 新CLI参数（仅在--new-cli模式下有效）
+    parser.add_argument(
+        "--module", "-m",
+        action="append",
+        dest="modules",
+        help="执行指定模块（可多次指定，需配合--new-cli）"
+    )
+
+    parser.add_argument(
+        "--category",
+        action="append",
+        dest="categories",
+        choices=["network", "storage", "gpu", "system", "security"],
+        help="执行指定分类的所有模块（可多次指定，需配合--new-cli）"
+    )
+
+    parser.add_argument(
+        "--plan",
+        dest="plan_file",
+        help="从执行计划文件执行（需配合--new-cli）"
+    )
+
+    parser.add_argument(
+        "--parallel",
+        action="store_true",
+        help="启用并行执行（需配合--new-cli）"
+    )
+
+    parser.add_argument(
+        "--output",
+        choices=["text", "json", "markdown"],
+        default="text",
+        dest="output_format",
+        help="输出格式 (默认: text)"
+    )
+
+    parser.add_argument(
+        "--output-file", "-o",
+        help="输出文件路径"
+    )
+
+    parser.add_argument(
+        "--yes", "-y",
+        action="store_true",
+        dest="skip_confirmation",
+        help="跳过确认提示"
     )
 
     return parser.parse_args()
@@ -318,6 +383,11 @@ def main():
     """主函数"""
     args = parse_args()
 
+    # 新CLI模式
+    if args.new_cli:
+        return run_new_cli(args)
+
+    # 传统模式（向后兼容）
     deploy = GPUClusterDeploy(
         config_dir=args.config_dir,
         log_level=args.log_level,
@@ -336,6 +406,56 @@ def main():
         steps=args.step,
         dry_run=args.dry_run
     )
+
+    return 0 if success else 1
+
+
+def run_new_cli(args):
+    """运行新CLI模式"""
+    from src.cli.main import CLIConfig, ExecutionMode, main as cli_main
+
+    # 确定执行模式
+    execution_mode = ExecutionMode.FULL
+    if args.phase:
+        execution_mode = ExecutionMode.PHASES
+    elif args.step:
+        execution_mode = ExecutionMode.STEPS
+    elif args.modules:
+        execution_mode = ExecutionMode.MODULES
+    elif args.categories:
+        execution_mode = ExecutionMode.CATEGORIES
+    elif args.plan_file:
+        execution_mode = ExecutionMode.PLAN
+
+    config = CLIConfig(
+        config_dir=args.config_dir,
+        log_level=args.log_level,
+        log_dir=args.log_dir,
+        dry_run=args.dry_run,
+        report_only=args.report_only,
+        execution_mode=execution_mode,
+        phases=args.phase or [],
+        steps=args.step or [],
+        modules=args.modules or [],
+        categories=args.categories or [],
+        plan_file=args.plan_file,
+        parallel=args.parallel,
+        max_parallel=3,
+        continue_on_error=False,
+        skip_confirmation=args.skip_confirmation,
+        output_format=args.output_format,
+        output_file=args.output_file,
+    )
+
+    return cli_main_with_config(config)
+
+
+def cli_main_with_config(config):
+    """使用配置运行CLI"""
+    from src.cli.execution_controller import ExecutionController
+
+    controller = ExecutionController(config)
+    success = controller.run()
 
     return 0 if success else 1
 
