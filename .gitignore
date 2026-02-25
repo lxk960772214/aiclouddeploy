@@ -1,0 +1,28 @@
+# Sensitive configuration files
+gpu-cluster-deploy/config/cluster.yaml
+gpu-cluster-deploy/config/versions.yaml
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+ENV/
+
+# Logs
+gpu-cluster-deploy/logs/
+*.log
+*.jsonl
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db

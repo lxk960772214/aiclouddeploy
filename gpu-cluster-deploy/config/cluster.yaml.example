@@ -1,5 +1,5 @@
-# GPU集群环境部署配置文件
-# ============================================
+# GPU集群环境部署配置文件示例
+# 使用方法: 复制此文件为 cluster.yaml 并修改配置
 
 # 集群基础配置
 cluster:
@@ -45,15 +45,6 @@ nodes:
       device: "/dev/nvme0n1"
       mount_point: "/ssd"
 
-  - hostname: "gpu-node-02"
-    ip: "10.254.43.67"
-    roles:
-      - gpu_node
-    storage:
-      type: "single"
-      device: "/dev/nvme0n1"
-      mount_point: "/ssd"
-
 # 网络配置
 network:
   # IB/RoCE网卡命名规则
@@ -62,14 +53,6 @@ network:
       pattern: "mlx5_[0-7]"
       count: 8
       net_prefix: "ib"       # 对应网络设备名 ib0-ib7
-    storage_200g:
-      pattern: "mlx5_[8-9]"
-      count: 2
-      net_prefix: "ib"       # 对应网络设备名 ib8-ib9
-    mezz_internal:
-      pattern: "mezz_[0-3]"
-      count: 4
-      net_prefix: "mezz"     # 对应网络设备名 mezz_0-mezz_3
 
 # NFS配置（可选）
 nfs:
@@ -82,11 +65,3 @@ nfs:
 time_sync:
   server: "gpu-master"       # 时间服务器主机名
   timezone: "Asia/Shanghai"
-
-# 用户配置
-users:
-  ubuntu:
-    uid: 1001
-    gid: 1001
-    sudo_nopasswd: true
-    ssh_key_auth: true
