@@ -178,9 +178,6 @@ nodes:
 cuda:
   version: "12.8"
   toolkit_file: "cuda_12.8.0_570.86.10_linux.run"
-  # 可选：指定下载URL或本地文件路径
-  # download_url: "https://..."
-  # local_file: "/opt/cuda_12.8.0_570.86.10_linux.run"
 
 # NVIDIA 驱动配置
 nvidia_driver:
@@ -204,6 +201,57 @@ openssh:
   min_version: "1:8.9p1-3ubuntu0.10"  # CVE-2024-6387 修复版本
   auto_upgrade: true
 ```
+
+#### 安装包来源配置
+
+支持三种方式指定安装包位置：
+
+**方式一：集群节点已有文件（推荐）**
+
+预先将安装包放到集群节点上，直接指定路径：
+
+```yaml
+cuda:
+  version: "12.8"
+  local_file: "/opt/software/cuda_12.8.0_570.86.10_linux.run"
+
+nvidia_driver:
+  version: "590.48.01"
+  local_file: "/opt/software/NVIDIA-Linux-x86_64-590.48.01.run"
+
+mlnx_ofed:
+  version: "24.10-2.1.8.0"
+  local_file: "/opt/software/MLNX_OFED_LINUX-24.10-2.1.8.0-ubuntu22.04-x86_64.tgz"
+```
+
+**方式二：从控制节点传输**
+
+安装包放在运行部署工具的控制节点上，工具会自动传输到集群节点：
+
+```yaml
+cuda:
+  version: "12.8"
+  local_file: "/home/user/software/cuda_12.8.0_570.86.10_linux.run"
+  # 注意：这是控制节点上的本地路径
+
+nvidia_driver:
+  version: "590.48.01"
+  local_file: "/home/user/software/NVIDIA-Linux-x86_64-590.48.01.run"
+```
+
+**方式三：指定下载 URL**
+
+```yaml
+cuda:
+  version: "12.8"
+  download_url: "https://developer.download.nvidia.com/compute/cuda/12.8.0/local_installers/cuda_12.8.0_570.86.10_linux.run"
+
+nvidia_driver:
+  version: "590.48.01"
+  download_url: "https://us.download.nvidia.com/XFree86/Linux-x86_64/590.48.01/NVIDIA-Linux-x86_64-590.48.01.run"
+```
+
+> **注意**：如果不指定 `local_file` 或 `download_url`，工具会使用默认路径 `/tmp/` 目录下的文件名。
 
 ### 4. 执行部署
 

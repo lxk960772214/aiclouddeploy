@@ -42,6 +42,29 @@ python src/main.py --dry-run
 python src/main.py
 ```
 
+**安装包配置方式：**
+
+支持三种方式指定驱动和软件包位置：
+
+| 方式 | 配置字段 | 说明 |
+|------|----------|------|
+| 集群节点已有 | `local_file: "/opt/software/xxx.run"` | 推荐方式，预先放到集群节点 |
+| 控制节点传输 | `local_file: "/home/user/xxx.run"` | 工具自动传输到集群 |
+| URL 下载 | `download_url: "https://..."` | 从网络下载 |
+
+示例配置 (`config/versions.yaml`)：
+
+```yaml
+# 方式一：集群节点已有文件（推荐）
+cuda:
+  version: "12.8"
+  local_file: "/opt/software/cuda_12.8.0_570.86.10_linux.run"
+
+nvidia_driver:
+  version: "590.48.01"
+  local_file: "/opt/software/NVIDIA-Linux-x86_64-590.48.01.run"
+```
+
 详细文档请参阅 [gpu-cluster-deploy/README.md](./gpu-cluster-deploy/README.md)。
 
 ## 系统要求
