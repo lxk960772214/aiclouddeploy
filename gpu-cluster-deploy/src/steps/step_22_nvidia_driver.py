@@ -6,6 +6,7 @@
 - 自动卸载不匹配的旧版本驱动
 - 清理残留内核模块和文件
 - 安装指定版本驱动
+- 支持自动下载和分发安装包
 """
 
 from typing import List, Optional, Tuple
@@ -17,11 +18,45 @@ class NVIDIADriver(BaseStep):
 
     step_id = "22"
     step_name = "安装NVIDIA GPU驱动"
-    step_description = "安装NVIDIA GPU驱动程序（支持自动卸载旧版本）"
+    step_description = "安装NVIDIA GPU驱动程序（支持自动下载、卸载旧版本）"
     requires_sudo = True
     supports_batch = False
     requires_reboot = True
-    timeout = 1800  # 30分钟（卸载+安装可能需要更长时间）
+    timeout = 2400  # 40分钟（下载+卸载+安装可能需要更长时间）
+
+    def _prepare_package(self, hosts: List[str]) -> dict:
+        """
+        准备驱动安装包
+
+        Args:
+            hosts: 目标主机列表
+
+        Returns:
+            dict: {host: (success, file_path)}
+        """
+        from src.package_manager import PackageManager, PackageConfig, PackageType
+
+        driver_config = self.versions.nvidia_driver
+
+        # 创建包配置
+        package = PackageConfig(
+            name="nvidia_driver",
+            version=driver_config.version,
+            package_type=PackageType.NVIDIA_DRIVER,
+            local_file=driver_config.local_file,
+            download_url=driver_config.download_url,
+            checksum=driver_config.checksum,
+            file_size=driver_config.file_size,
+        )
+
+        # 创建包管理器
+        manager = PackageManager(
+            ssh_manager=self.ssh_manager,
+            logger=self.logger
+        )
+
+        # 准备安装包（自动下载和分发）
+        return manager.prepare_package(package, hosts, dest_path=f"/tmp/{package.filename}")
 
     def _detect_existing_driver(self, host: str) -> Tuple[bool, Optional[str]]:
         """
@@ -238,20 +273,45 @@ class NVIDIADriver(BaseStep):
 
         driver_config = self.versions.nvidia_driver
         target_version = driver_config.version
-        driver_file = driver_config.local_file or f"/tmp/NVIDIA-Linux-x86_64-{target_version}.run"
 
-        for host in hosts:
+        self.logger.info("=" * 60)
+        self.logger.info("NVIDIA驱动安装流程")
+        self.logger.info(f"目标版本: {target_version}")
+        self.logger.info(f"目标节点: {len(hosts)} 个")
+        self.logger.info("=" * 60)
+
+        # 1. 准备安装包（下载+分发）
+        self.logger.info("步骤1: 准备安装包...")
+        package_paths = self._prepare_package(hosts)
+
+        # 检查是否有节点准备失败
+        failed_prep = [h for h, path in package_paths.items() if path is None]
+        if failed_prep:
+            self.logger.error(f"安装包准备失败的节点: {failed_prep}")
+            for host in failed_prep:
+                results[host] = {
+                    "success": False,
+                    "error": "安装包准备失败",
+                    "target_version": target_version
+                }
+
+        # 只处理准备成功的节点
+        hosts_to_install = [h for h in hosts if package_paths.get(h)]
+        self.logger.info(f"需要安装的节点: {len(hosts_to_install)} 个")
+
+        for host in hosts_to_install:
             self.logger.info(f"[{host}] ========== NVIDIA驱动安装流程开始 ==========")
             self.logger.info(f"[{host}] 目标版本: {target_version}")
 
             host_result = {"target_version": target_version}
+            driver_file = package_paths[host]
 
-            # 1. 检测现有驱动
+            # 2. 检测现有驱动
             has_driver, current_version = self._detect_existing_driver(host)
             host_result["existing_driver"] = has_driver
             host_result["current_version"] = current_version
 
-            # 2. 判断是否需要卸载
+            # 3. 判断是否需要卸载
             need_uninstall = False
             if has_driver:
                 if current_version:
@@ -269,7 +329,7 @@ class NVIDIADriver(BaseStep):
                     # 有驱动但无法确定版本，安全起见卸载
                     need_uninstall = True
 
-            # 3. 卸载旧驱动（如果需要）
+            # 4. 卸载旧驱动（如果需要）
             if need_uninstall:
                 self.logger.info(f"[{host}] 执行旧驱动卸载...")
                 uninstall_result = self._uninstall_existing_driver(host, current_version)
@@ -279,7 +339,7 @@ class NVIDIADriver(BaseStep):
                 import time
                 time.sleep(2)
 
-            # 4. 安装新驱动
+            # 5. 安装新驱动
             install_result = self._install_driver(host, target_version, driver_file)
             host_result["install"] = install_result
 

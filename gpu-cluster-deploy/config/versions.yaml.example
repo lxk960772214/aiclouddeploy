@@ -1,30 +1,74 @@
 # 软件版本配置示例
 # 使用方法: 复制此文件为 versions.yaml 并修改配置
 
+# ============================================================
+# 安装包管理说明
+# ============================================================
+# 支持三种方式获取安装包（优先级从高到低）:
+#
+# 1. local_file: 指定节点上已有的文件路径
+#    - 适合安装包已预先分发到集群的场景
+#    - 无需下载，直接使用
+#
+# 2. download_url: 指定下载URL
+#    - 自动在跳转机下载一次
+#    - 然后分发给所有目标节点
+#    - 支持断点续传
+#
+# 3. 默认路径: /tmp/{filename}
+#    - 如果上述都未配置，使用默认路径
+#    - 需要预先放置文件
+#
+# 可选校验:
+# - checksum: 文件校验和，格式 "sha256:xxx" 或 "md5:xxx"
+# - file_size: 文件大小（字节），用于进度显示
+# ============================================================
+
 # CUDA配置
 cuda:
   version: "12.8"
   toolkit_file: "cuda_12.8.0_570.86.10_linux.run"
-  # 安装包位置（三选一）
-  # 方式1: 集群节点已有文件（推荐）
+
+  # 安装包位置（三选一，优先级从高到低）
+  # 方式1: 集群节点已有文件（推荐，无需下载）
   # local_file: "/opt/software/cuda_12.8.0_570.86.10_linux.run"
-  # 方式2: 从URL下载
+
+  # 方式2: 从URL下载（自动下载到跳转机，然后分发给所有节点）
   # download_url: "https://developer.download.nvidia.com/compute/cuda/12.8.0/local_installers/cuda_12.8.0_570.86.10_linux.run"
+
+  # 校验和（可选，用于验证下载文件完整性）
+  # checksum: "sha256:abc123..."
+
+  # 文件大小（可选，用于下载进度显示）
+  # file_size: 4500000000
 
 # NVIDIA驱动配置
 nvidia_driver:
   version: "590.48.01"
   file: "NVIDIA-Linux-x86_64-590.48.01.run"
+
   # 安装包位置（三选一）
   # local_file: "/opt/software/NVIDIA-Linux-x86_64-590.48.01.run"
   # download_url: "https://us.download.nvidia.com/XFree86/Linux-x86_64/590.48.01/NVIDIA-Linux-x86_64-590.48.01.run"
+
+  # 校验和（可选）
+  # checksum: "sha256:xxx"
+
+  # 文件大小（可选）
+  # file_size: 300000000
 
 # MLNX_OFED驱动配置
 mlnx_ofed:
   version: "24.10-2.1.8.0"
   file: "MLNX_OFED_LINUX-24.10-2.1.8.0-ubuntu22.04-x86_64.tgz"
   enabled: true
+
+  # 安装包位置（三选一）
   # local_file: "/opt/software/MLNX_OFED_LINUX-24.10-2.1.8.0-ubuntu22.04-x86_64.tgz"
+  # download_url: "https://content.mellanox.com/ofed/MLNX_OFED-24.10-2.1.8.0/MLNX_OFED_LINUX-24.10-2.1.8.0-ubuntu22.04-x86_64.tgz"
+
+  # 校验和（可选）
+  # checksum: "sha256:xxx"
 
 # 内核配置
 kernel:

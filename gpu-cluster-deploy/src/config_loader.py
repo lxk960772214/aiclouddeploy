@@ -176,6 +176,8 @@ class CudaConfig:
     toolkit_file: Optional[str] = None
     download_url: Optional[str] = None
     local_file: Optional[str] = None
+    checksum: Optional[str] = None  # 校验和 (格式: sha256:xxx 或 md5:xxx)
+    file_size: Optional[int] = None  # 文件大小(字节)
 
 
 @dataclass
@@ -185,6 +187,8 @@ class NvidiaDriverConfig:
     file: Optional[str] = None
     download_url: Optional[str] = None
     local_file: Optional[str] = None
+    checksum: Optional[str] = None  # 校验和 (格式: sha256:xxx 或 md5:xxx)
+    file_size: Optional[int] = None  # 文件大小(字节)
 
 
 @dataclass
@@ -194,6 +198,8 @@ class MlnxOfedConfig:
     file: Optional[str] = None
     download_url: Optional[str] = None
     local_file: Optional[str] = None
+    checksum: Optional[str] = None  # 校验和 (格式: sha256:xxx 或 md5:xxx)
+    file_size: Optional[int] = None  # 文件大小(字节)
 
 
 @dataclass
@@ -684,7 +690,9 @@ class ConfigLoader:
             version=cuda_raw.get("version", "12.8"),
             toolkit_file=cuda_raw.get("toolkit_file"),
             download_url=cuda_raw.get("download_url"),
-            local_file=cuda_raw.get("local_file")
+            local_file=cuda_raw.get("local_file"),
+            checksum=cuda_raw.get("checksum"),
+            file_size=cuda_raw.get("file_size")
         )
 
         # 解析NVIDIA驱动
@@ -693,7 +701,9 @@ class ConfigLoader:
             version=driver_raw.get("version", "590.48.01"),
             file=driver_raw.get("file"),
             download_url=driver_raw.get("download_url"),
-            local_file=driver_raw.get("local_file")
+            local_file=driver_raw.get("local_file"),
+            checksum=driver_raw.get("checksum"),
+            file_size=driver_raw.get("file_size")
         )
 
         # 解析MLNX_OFED
@@ -702,7 +712,9 @@ class ConfigLoader:
             version=mlnx_raw.get("version", "24.10-2.1.8.0"),
             file=mlnx_raw.get("file"),
             download_url=mlnx_raw.get("download_url"),
-            local_file=mlnx_raw.get("local_file")
+            local_file=mlnx_raw.get("local_file"),
+            checksum=mlnx_raw.get("checksum"),
+            file_size=mlnx_raw.get("file_size")
         )
 
         # 解析内核配置
