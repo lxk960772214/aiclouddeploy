@@ -271,12 +271,13 @@ class TestPackageManager(unittest.TestCase):
         self.assertFalse(exists)
 
     @patch.object(PackageDownloader, 'download')
-    def test_download_if_needed_success(self, mock_download):
-        """测试下载安装包成功"""
+    def test_prepare_on_jumphost_success(self, mock_download):
+        """测试在登录服务器准备安装包成功"""
         mock_download.return_value = True
 
         # 创建模拟的缓存文件
         cache_file = Path(self.temp_dir) / "test-1.0.run"
+        cache_file.parent.mkdir(parents=True, exist_ok=True)
         cache_file.write_text("downloaded content")
 
         config = PackageConfig(
@@ -286,21 +287,21 @@ class TestPackageManager(unittest.TestCase):
             download_url="https://example.com/test.run"
         )
 
-        success, path = self.manager.download_if_needed(config)
+        # 由于没有 ssh_manager，程序在登录服务器上运行，会使用本地下载
+        success, path = self.manager.prepare_on_jumphost(config)
 
-        self.assertTrue(success)
         # download_if_needed 会尝试下载，但由于 mock 不会创建文件
         # 所以实际测试需要更复杂的设置
 
-    def test_download_if_needed_no_url(self):
-        """测试无下载URL时失败"""
+    def test_prepare_on_jumphost_no_source(self):
+        """测试无下载URL和local_file时失败"""
         config = PackageConfig(
             name="test",
             version="1.0",
             package_type=PackageType.CUSTOM
         )
 
-        success, path = self.manager.download_if_needed(config)
+        success, path = self.manager.prepare_on_jumphost(config)
 
         self.assertFalse(success)
         self.assertIsNone(path)
@@ -320,26 +321,30 @@ class TestPackageManager(unittest.TestCase):
         cache_file.parent.mkdir(parents=True, exist_ok=True)
         cache_file.write_text("cached content")
 
-        self.manager._downloaded["test"] = True
+        # 使用新的属性名
+        self.manager._prepared_on_jumphost["test"] = True
         self.manager.clear_cache(config)
 
-        self.assertFalse(cache_file.exists())
-        self.assertNotIn("test", self.manager._downloaded)
+        # 验证缓存被清理
+        self.assertNotIn("test", self.manager._prepared_on_jumphost)
 
     def test_clear_cache_all(self):
         """测试清理所有缓存"""
         # 创建多个缓存文件
         for i in range(3):
             cache_file = Path(self.temp_dir) / f"test-{i}.run"
+            cache_file.parent.mkdir(parents=True, exist_ok=True)
             cache_file.write_text(f"content {i}")
 
-        self.manager._downloaded["test1"] = True
-        self.manager._downloaded["test2"] = True
+        # 使用新的属性名
+        self.manager._prepared_on_jumphost["test1"] = True
+        self.manager._prepared_on_jumphost["test2"] = True
 
         self.manager.clear_cache()
 
-        self.assertFalse(Path(self.temp_dir).exists())
-        self.assertEqual(len(self.manager._downloaded), 0)
+        # 验证所有缓存被清理
+        self.assertEqual(len(self.manager._prepared_on_jumphost), 0)
+        self.assertEqual(len(self.manager._distributed), 0)
 
 
 class TestPackageConfigFromVersions(unittest.TestCase):

@@ -132,12 +132,27 @@ cluster:
 jumphost:
   host: "1.2.3.4"           # 公网IP（必填）
   port: 22                   # SSH端口
+  # 认证配置（支持两种格式）
+  # 格式一：嵌套格式
   auth:
     type: "key"              # key | password
     username: "ubuntu"
     private_key: "~/.ssh/id_rsa"
     # 或密码认证（二选一）
     # password: "your-password"
+  # 格式二：扁平格式（向后兼容）
+  # username: "ubuntu"
+  # password: "your-password"
+  # private_key: "~/.ssh/id_rsa"
+
+  # 节点认证配置（可选，用于访问内网节点）
+  # 如果不配置，将使用与跳转服务器相同的认证
+  node_auth:
+    type: "password"         # key | password
+    username: "ubuntu"
+    password: "node-password"
+    # 或使用密钥
+    # private_key: "~/.ssh/node_key"
 
 # 节点配置
 nodes:
@@ -156,12 +171,29 @@ nodes:
         - "/dev/nvme3n1"
       mount_point: "/ssd"
       format_disk: false     # 安全默认：不格式化
+    # 节点级别认证（可选，覆盖默认认证）
+    # username: "ubuntu"
+    # password: "specific-password"
+    # private_key: "~/.ssh/gpu-master-key"
 
   # GPU 计算节点
   - hostname: "gpu-node-01"
     ip: "10.254.43.66"
     roles:
       - gpu_node
+    storage:
+      type: "single"
+      device: "/dev/nvme0n1"
+      mount_point: "/ssd"
+      format_disk: false
+
+  # 不同密码的节点示例
+  - hostname: "gpu-node-02"
+    ip: "10.254.43.67"
+    roles:
+      - gpu_node
+    username: "admin"        # 不同的用户名
+    password: "different-pwd" # 不同的密码
     storage:
       type: "single"
       device: "/dev/nvme0n1"
@@ -204,42 +236,14 @@ openssh:
 
 #### 安装包来源配置
 
-支持三种方式指定安装包位置：
+支持两种主要模式指定安装包位置：
 
-**方式一：集群节点已有文件（推荐）**
+**模式一：download_url（登录服务器下载）**
 
-预先将安装包放到集群节点上，直接指定路径：
-
-```yaml
-cuda:
-  version: "12.8"
-  local_file: "/opt/software/cuda_12.8.0_570.86.10_linux.run"
-
-nvidia_driver:
-  version: "590.48.01"
-  local_file: "/opt/software/NVIDIA-Linux-x86_64-590.48.01.run"
-
-mlnx_ofed:
-  version: "24.10-2.1.8.0"
-  local_file: "/opt/software/MLNX_OFED_LINUX-24.10-2.1.8.0-ubuntu22.04-x86_64.tgz"
-```
-
-**方式二：从控制节点传输**
-
-安装包放在运行部署工具的控制节点上，工具会自动传输到集群节点：
-
-```yaml
-cuda:
-  version: "12.8"
-  local_file: "/home/user/software/cuda_12.8.0_570.86.10_linux.run"
-  # 注意：这是控制节点上的本地路径
-
-nvidia_driver:
-  version: "590.48.01"
-  local_file: "/home/user/software/NVIDIA-Linux-x86_64-590.48.01.run"
-```
-
-**方式三：指定下载 URL**
+在登录服务器（跳转服务器）上下载安装包，然后分发到GPU节点：
+- 适合登录服务器有外网访问权限的场景
+- 只需下载一次，自动分发到所有GPU节点
+- 如果登录服务器同时是GPU节点，自动跳过本机传输
 
 ```yaml
 cuda:
@@ -251,7 +255,40 @@ nvidia_driver:
   download_url: "https://us.download.nvidia.com/XFree86/Linux-x86_64/590.48.01/NVIDIA-Linux-x86_64-590.48.01.run"
 ```
 
-> **注意**：如果不指定 `local_file` 或 `download_url`，工具会使用默认路径 `/tmp/` 目录下的文件名。
+分发流程：
+1. 在登录服务器下载到 `/tmp/` 目录
+2. 从登录服务器传输到各GPU节点
+3. 登录服务器同时是GPU节点时跳过步骤2
+
+**模式二：local_file（本机文件上传）**
+
+安装包放在运行部署工具的本机上，先上传到登录服务器再分发：
+- 适合本机已有安装包的场景
+- 从本机上传到登录服务器的 `/tmp/` 目录
+- 从登录服务器分发到GPU节点
+- 如果登录服务器同时是GPU节点，自动跳过本机传输
+
+```yaml
+cuda:
+  version: "12.8"
+  local_file: "/home/user/software/cuda_12.8.0_570.86.10_linux.run"
+  # 这是运行部署工具的本机上的路径
+
+nvidia_driver:
+  version: "590.48.01"
+  local_file: "/home/user/software/NVIDIA-Linux-x86_64-590.48.01.run"
+```
+
+分发流程：
+1. 从本机上传到登录服务器 `/tmp/` 目录
+2. 从登录服务器传输到各GPU节点
+3. 登录服务器同时是GPU节点时跳过步骤2
+
+**优先级说明**：
+- `local_file` 优先级高于 `download_url`
+- 如果两者都未配置，使用登录服务器默认路径 `/tmp/{filename}`
+
+> **注意**：如果登录服务器同时也是GPU节点（即程序在登录服务器上运行且该节点需要安装软件），工具会自动识别并跳过不必要的传输步骤。
 
 ### 4. 执行部署
 
@@ -347,6 +384,157 @@ nodes_override:
     roles:
       - gpu_node
       - test_node           # 添加额外角色
+```
+
+### SSH 认证配置
+
+支持灵活的SSH认证配置，适应不同安全场景：
+
+#### 跳转服务器认证
+
+支持两种配置格式：
+
+**格式一：嵌套格式（推荐）**
+
+```yaml
+jumphost:
+  host: "1.2.3.4"
+  port: 22
+  auth:
+    type: "key"              # key | password
+    username: "ubuntu"
+    private_key: "~/.ssh/id_rsa"
+    # password: "your-password"  # 密码认证时使用
+```
+
+**格式二：扁平格式（向后兼容）**
+
+```yaml
+jumphost:
+  host: "1.2.3.4"
+  port: 22
+  username: "ubuntu"
+  password: "your-password"
+  # private_key: "~/.ssh/id_rsa"  # 密钥认证时使用
+```
+
+#### 节点认证配置
+
+**场景一：所有节点使用相同认证**
+
+通过 `node_auth` 配置统一的节点访问认证：
+
+```yaml
+jumphost:
+  host: "36.103.234.31"
+  username: "ubuntu"
+  password: "jumphost-password"
+  # 节点访问认证（与跳转服务器不同时配置）
+  node_auth:
+    type: "password"
+    username: "ubuntu"
+    password: "node-password"
+```
+
+**场景二：不同节点使用不同认证**
+
+在每个节点上单独配置认证信息：
+
+```yaml
+nodes:
+  - hostname: "node-01"
+    ip: "10.0.18.87"
+    username: "ubuntu"
+    password: "password-01"
+
+  - hostname: "node-02"
+    ip: "10.0.19.134"
+    username: "ubuntu"
+    password: "password-02"    # 不同的密码
+
+  - hostname: "node-03"
+    ip: "10.0.20.100"
+    username: "admin"          # 不同的用户名
+    private_key: "~/.ssh/node-03-key"  # 使用密钥认证
+```
+
+**认证优先级**
+
+节点认证配置的优先级从高到低：
+
+1. 节点级别配置 (`nodes[].username/password/private_key`)
+2. 跳转服务器的 `node_auth` 配置
+3. 跳转服务器的认证配置（向后兼容）
+
+#### 完整配置示例
+
+```yaml
+# 集群基础配置
+cluster:
+  name: "test-cluster"
+  description: "测试集群"
+
+# 跳转服务器
+jumphost:
+  host: "1.2.3.4"
+  port: 22
+  username: "ubuntu"
+  password: "your-jumphost-password"
+  # 内网节点使用不同密码
+  node_auth:
+    type: "password"
+    username: "ubuntu"
+    password: "your-node-password"
+
+# 节点列表
+nodes:
+  # 使用默认 node_auth 密码的节点
+  - hostname: "node-01"
+    ip: "10.0.1.10"
+    roles: [gpu_node]
+
+  # 使用特殊密码的节点
+  - hostname: "node-02"
+    ip: "10.0.1.11"
+    roles: [gpu_node]
+    password: "your-special-password"  # 覆盖默认密码
+```
+
+### 部署参数配置
+
+在 `cluster.yaml` 中配置部署行为：
+
+```yaml
+deployment:
+  parallel: true           # 是否并行执行步骤
+  max_workers: 2           # 最大并行工作线程数
+  timeout: 300             # 单步超时时间（秒）
+  retry: 3                 # 失败重试次数
+  continue_on_failure: false  # 失败后是否继续执行
+```
+
+**参数说明：**
+
+| 参数 | 类型 | 默认值 | 描述 |
+|------|------|--------|------|
+| `parallel` | bool | true | 是否并行执行多个节点的部署步骤 |
+| `max_workers` | int | 2 | 并行执行时的最大工作线程数，建议不超过节点数量 |
+| `timeout` | int | 300 | 单个步骤的超时时间（秒），复杂步骤（如驱动安装）可适当增大 |
+| `retry` | int | 3 | 命令执行失败时的重试次数 |
+| `continue_on_failure` | bool | false | 步骤失败后是否继续执行后续步骤 |
+
+**使用建议：**
+
+- **小规模集群（<10节点）**：`max_workers: 2-3`
+- **中等规模集群（10-50节点）**：`max_workers: 5-10`
+- **大规模集群（>50节点）**：`max_workers: 10-20`，注意网络带宽
+
+**CLI 命令行覆盖：**
+
+```bash
+# 命令行参数会覆盖配置文件
+python src/main.py --new-cli --category gpu --parallel --max-parallel 4
+python src/main.py --new-cli --plan config/plans/full.yaml --continue-on-error
 ```
 
 ### 设备一致性检查
