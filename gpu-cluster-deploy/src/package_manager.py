@@ -550,13 +550,18 @@ class PackageManager:
 
         # 通过登录服务器SCP传输到目标节点
         try:
+            # 注意：不设置传输超时，让传输自然完成
+            # ConnectTimeout 只控制连接建立超时，不影响传输过程
             if password:
-                scp_cmd = f"sshpass -p '{password}' scp -o StrictHostKeyChecking=no -o ConnectTimeout=30 {jumphost_path} {username}@{target_host}:{dest_path}"
+                scp_cmd = f"sshpass -p '{password}' scp -o StrictHostKeyChecking=no -o ConnectTimeout=30 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 {jumphost_path} {username}@{target_host}:{dest_path}"
             else:
-                scp_cmd = f"scp -o StrictHostKeyChecking=no -o ConnectTimeout=30 {jumphost_path} {username}@{target_host}:{dest_path}"
+                scp_cmd = f"scp -o StrictHostKeyChecking=no -o ConnectTimeout=30 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 {jumphost_path} {username}@{target_host}:{dest_path}"
 
-            self.logger.debug(f"[登录服务器] 执行SCP: {scp_cmd}")
-            stdin, stdout, stderr = self.ssh_manager.jump_client.exec_command(scp_cmd)
+            self.logger.info(f"[登录服务器] 开始SCP传输: {jumphost_path} -> {target_host}:{dest_path}")
+            self.logger.debug(f"[登录服务器] SCP命令: {scp_cmd}")
+
+            # exec_command 的 timeout=None 表示不设置超时，让传输自然完成
+            stdin, stdout, stderr = self.ssh_manager.jump_client.exec_command(scp_cmd, timeout=None)
             exit_code = stdout.channel.recv_exit_status()
 
             if exit_code == 0:

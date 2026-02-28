@@ -29,6 +29,33 @@ class SSHResult:
         status = "✓" if self.success else "✗"
         return f"{status} [{self.host}] exit={self.exit_code}, duration={self.duration:.2f}s"
 
+    def get(self, key: str, default: Any = None) -> Any:
+        """
+        字典式访问支持，提供向后兼容性
+
+        Args:
+            key: 键名 (success, exit_code, stdout, stderr, host, command, duration)
+            default: 默认值
+
+        Returns:
+            属性值或默认值
+        """
+        if hasattr(self, key):
+            return getattr(self, key)
+        return default
+
+    def to_dict(self) -> Dict[str, Any]:
+        """转换为字典"""
+        return {
+            "success": self.success,
+            "exit_code": self.exit_code,
+            "stdout": self.stdout,
+            "stderr": self.stderr,
+            "host": self.host,
+            "command": self.command,
+            "duration": self.duration
+        }
+
 
 class SSHConnection:
     """SSH连接封装"""
@@ -70,7 +97,9 @@ class SSHConnection:
                         username=self.username,
                         pkey=key,
                         sock=channel,
-                        timeout=timeout
+                        timeout=timeout,
+                        allow_agent=False,
+                        look_for_keys=False
                     )
                 else:
                     self.client.connect(
@@ -79,7 +108,9 @@ class SSHConnection:
                         username=self.username,
                         password=self.password,
                         sock=channel,
-                        timeout=timeout
+                        timeout=timeout,
+                        allow_agent=False,
+                        look_for_keys=False
                     )
             else:
                 # 直连
@@ -90,7 +121,9 @@ class SSHConnection:
                         port=self.port,
                         username=self.username,
                         pkey=key,
-                        timeout=timeout
+                        timeout=timeout,
+                        allow_agent=False,
+                        look_for_keys=False
                     )
                 else:
                     self.client.connect(
@@ -98,10 +131,16 @@ class SSHConnection:
                         port=self.port,
                         username=self.username,
                         password=self.password,
-                        timeout=timeout
+                        timeout=timeout,
+                        allow_agent=False,
+                        look_for_keys=False
                     )
 
             self._connected = True
+            # 设置 keepalive，每30秒发送心跳包，防止长时间传输时连接断开
+            transport = self.client.get_transport()
+            if transport:
+                transport.set_keepalive(30)
             logger.info(f"SSH连接成功: {self.username}@{self.host}:{self.port}")
             return True
 
@@ -142,7 +181,9 @@ class SSHConnection:
 
         try:
             if sudo and sudo_password:
-                command = f"echo '{sudo_password}' | sudo -S {command}"
+                # 使用 sh -c 包装命令，确保 && 连接的命令都在 sudo 下执行
+                # 例如: sudo apt-get update && apt-get install -> sudo sh -c "apt-get update && apt-get install"
+                command = f"echo '{sudo_password}' | sudo -S sh -c '{command}'"
 
             stdin, stdout, stderr = self.client.exec_command(command, timeout=timeout)
 
@@ -264,7 +305,9 @@ class SSHManager:
                     port=port,
                     username=username,
                     pkey=key,
-                    timeout=timeout
+                    timeout=timeout,
+                    allow_agent=False,
+                    look_for_keys=False
                 )
             else:
                 self.jump_client.connect(
@@ -272,10 +315,16 @@ class SSHManager:
                     port=port,
                     username=username,
                     password=password,
-                    timeout=timeout
+                    timeout=timeout,
+                    allow_agent=False,
+                    look_for_keys=False
                 )
 
             self._jump_connected = True
+            # 设置 keepalive，每30秒发送心跳包，防止长时间传输时连接断开
+            transport = self.jump_client.get_transport()
+            if transport:
+                transport.set_keepalive(30)
             logger.info(f"跳转服务器连接成功: {username}@{host}:{port}")
             return True
 
@@ -363,6 +412,10 @@ class SSHManager:
                 command=command
             )
 
+        # 如果没有提供 sudo_password，使用连接密码
+        if sudo and not sudo_password:
+            sudo_password = password
+
         return conn.execute(command, timeout, sudo, sudo_password)
 
     def execute_on_hosts(self, hosts: List[str], command: str,
@@ -400,6 +453,170 @@ class SSHManager:
                 results[host] = result
 
         return results
+
+    def copy_file_to_host(self, local_path: str, remote_path: str, host: str,
+                          port: int = 22, username: str = "ubuntu",
+                          password: Optional[str] = None,
+                          private_key: Optional[str] = None,
+                          timeout: int = None) -> bool:
+        """
+        复制本地文件到远程主机（通过跳转服务器）
+
+        Args:
+            local_path: 本地文件路径
+            remote_path: 远程目标路径
+            host: 目标主机
+            port: SSH端口
+            username: 用户名
+            password: 密码
+            private_key: 私钥路径
+            timeout: 连接超时时间（传输本身不设超时，让传输自然完成）
+
+        Returns:
+            bool: 是否成功
+        """
+        # 默认连接超时30秒，但传输过程不设超时
+        if timeout is None:
+            timeout = 30
+        import os
+
+        if not os.path.exists(local_path):
+            logger.error(f"本地文件不存在: {local_path}")
+            return False
+
+        # 获取连接
+        conn = self.get_connection(
+            host=host,
+            port=port,
+            username=username,
+            password=password,
+            private_key=private_key,
+            timeout=timeout
+        )
+
+        if not conn:
+            logger.error(f"无法连接到主机: {host}")
+            return False
+
+        try:
+            # 通过跳转服务器传输文件
+            if self.jump_client:
+                # 检查目标主机是否是跳转服务器本身
+                # 获取跳转服务器的所有 IP 地址
+                stdin, stdout, stderr = self.jump_client.exec_command("hostname -I 2>/dev/null || hostname -i")
+                jump_ips = stdout.read().decode().strip().split()
+                jump_public_ip = self.jumphost_config.get("host", "") if self.jumphost_config else ""
+
+                logger.info(f"跳转服务器 IPs: {jump_ips}")
+                logger.info(f"跳转服务器公网 IP: {jump_public_ip}")
+                logger.info(f"目标主机: {host}")
+
+                is_jump_server_target = host in jump_ips or host == jump_public_ip
+                logger.info(f"是否跳转服务器本身: {is_jump_server_target}")
+
+                if is_jump_server_target:
+                    # 目标就是跳转服务器本身，直接上传到目标路径
+                    logger.info(f"目标主机 {host} 是跳转服务器本身，直接上传到目标路径")
+                    sftp = self.jump_client.open_sftp()
+                    sftp.put(local_path, remote_path)
+                    sftp.close()
+                    logger.info(f"文件已直接上传到跳转服务器: {remote_path}")
+                    return True
+                else:
+                    # 使用SCP通过跳转服务器
+                    # 先传输到跳转服务器，再传输到目标主机
+                    jump_temp_path = f"/tmp/{os.path.basename(local_path)}"
+
+                    # 上传到跳转服务器
+                    sftp = self.jump_client.open_sftp()
+                    sftp.put(local_path, jump_temp_path)
+                    sftp.close()
+                    logger.info(f"文件已上传到跳转服务器: {jump_temp_path}")
+
+                    # 检查跳转服务器上的文件大小
+                    check_cmd = f"ls -la {jump_temp_path}"
+                    stdin, stdout, stderr = self.jump_client.exec_command(check_cmd)
+                    ls_output = stdout.read().decode().strip()
+                    logger.info(f"跳转服务器文件状态: {ls_output}")
+
+                    # 从跳转服务器传输到目标主机
+                    # 使用 sshpass + scp 命令（如果有密码）
+                    # 注意：不设置传输超时，让传输自然完成
+                    # ServerAliveInterval 保持连接活跃，避免因空闲断开
+                    if password:
+                        scp_cmd = f"sshpass -p '{password}' scp -o StrictHostKeyChecking=no -o ConnectTimeout=30 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 {jump_temp_path} {username}@{host}:{remote_path}"
+                    else:
+                        scp_cmd = f"scp -o StrictHostKeyChecking=no -o ConnectTimeout=30 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 {jump_temp_path} {username}@{host}:{remote_path}"
+                    logger.info(f"开始 SCP 传输: {jump_temp_path} -> {host}:{remote_path}")
+                    logger.debug(f"执行 SCP: {scp_cmd}")
+                    # exec_command 的 timeout=None 表示不设置超时，让传输自然完成
+                    stdin, stdout, stderr = self.jump_client.exec_command(scp_cmd, timeout=None)
+                    exit_code = stdout.channel.recv_exit_status()
+
+                    # 读取输出
+                    scp_stdout = stdout.read().decode()
+                    scp_stderr = stderr.read().decode()
+
+                    if scp_stdout:
+                        logger.info(f"SCP stdout: {scp_stdout}")
+                    if scp_stderr:
+                        logger.warning(f"SCP stderr: {scp_stderr}")
+
+                    # 清理跳转服务器上的临时文件
+                    self.jump_client.exec_command(f"rm -f {jump_temp_path}")
+
+                    if exit_code == 0:
+                        # 验证目标文件是否存在
+                        logger.info(f"SCP 返回成功，验证目标文件...")
+                        return True
+                    else:
+                        logger.error(f"SCP 失败: exit_code={exit_code}, stderr={scp_stderr}")
+                        return False
+            else:
+                # 没有跳转服务器，程序可能在跳转服务器上运行
+                logger.info(f"无跳转服务器连接，检查目标主机是否是本机...")
+
+                # 检查目标主机是否是本机
+                import socket
+                local_ips = []
+                try:
+                    # 获取本机所有 IP
+                    hostname = socket.gethostname()
+                    local_ips.append(socket.gethostbyname(hostname))
+                    # 也添加内网 IP
+                    for ip in socket.gethostbyname_ex(hostname)[2]:
+                        if ip not in local_ips:
+                            local_ips.append(ip)
+                except:
+                    pass
+
+                logger.info(f"本机 IPs: {local_ips}")
+                logger.info(f"目标主机: {host}")
+
+                if host in local_ips or host == "127.0.0.1" or host == "localhost":
+                    # 目标是本机，直接复制文件
+                    logger.info(f"目标主机 {host} 是本机，直接复制文件")
+                    import shutil
+                    try:
+                        # 确保目标目录存在
+                        import os
+                        os.makedirs(os.path.dirname(remote_path), exist_ok=True)
+                        shutil.copy2(local_path, remote_path)
+                        logger.info(f"文件已复制到: {remote_path}")
+                        return True
+                    except Exception as e:
+                        logger.error(f"复制文件失败: {e}")
+                        return False
+                else:
+                    # 通过 SSH 直接传输到目标主机
+                    logger.info(f"通过 SSH 传输到目标主机: {host}")
+                    return conn.put_file(local_path, remote_path)
+
+        except Exception as e:
+            logger.error(f"文件传输异常: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return False
 
     def close_all(self):
         """关闭所有连接"""
