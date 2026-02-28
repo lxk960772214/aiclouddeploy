@@ -61,14 +61,24 @@ class HostnameHosts(BaseStep):
                     remove_old = f"sed -i '/{entry_hostname}$/d' /etc/hosts"
                     self.execute_on_host(host, remove_old, sudo=True)
 
-            # 4. 添加hosts条目
-            add_hosts_cmd = f'''cat >> /etc/hosts << 'EOF'
-{hosts_content}
-EOF'''
-            add_result = self.execute_on_host(host, add_hosts_cmd, sudo=True)
+            # 4. 添加hosts条目（逐条添加，避免多行命令问题）
+            add_success = True
+            for entry in hosts_entries:
+                # 使用 grep 检查条目是否已存在
+                entry_ip, entry_hostname = entry.split(None, 1)
+                check_entry = f"grep -q '^{entry_ip}[[:space:]]' /etc/hosts"
+                check_result = self.execute_on_host(host, check_entry, sudo=False)
+
+                if not check_result["success"]:
+                    # 条目不存在，添加
+                    add_cmd = f"echo '{entry}' | sudo tee -a /etc/hosts"
+                    add_result = self.execute_on_host(host, add_cmd, sudo=False)
+                    if not add_result["success"]:
+                        add_success = False
+                        break
 
             all_results[host] = {
-                "success": add_result["success"],
+                "success": add_success,
                 "hostname": node.hostname
             }
 
