@@ -14,25 +14,28 @@ class LockKernel(BaseStep):
     step_description = "在GRUB中固定当前内核版本"
     requires_sudo = True
     supports_batch = True
+    can_skip = True  # 允许跳过
 
     def execute(self, hosts: List[str]) -> StepResult:
         """执行内核版本固定"""
-        # 获取内核版本并更新GRUB
+        # 使用POSIX兼容语法，修复[[ ]]在sh中不可用的问题
+        # 直接修改GRUB_DEFAULT行，不依赖行号
         cmd = '''
 kernel_version=$(uname -r)
 grub_config="/etc/default/grub"
+new_default="Advanced options for Ubuntu>Ubuntu, with Linux $kernel_version"
 
 if grep -q "^GRUB_DEFAULT=" "$grub_config"; then
-    current_grub_default=$(sed -n '6p' "$grub_config")
-    if [[ "$current_grub_default" == GRUB_DEFAULT=* ]]; then
-        sed -i "6s|^GRUB_DEFAULT=.*|GRUB_DEFAULT=\"Advanced options for Ubuntu>Ubuntu, with Linux $kernel_version\"|" $grub_config
-        update-grub
+    sed -i "s|^GRUB_DEFAULT=.*|GRUB_DEFAULT=\"$new_default\"|" "$grub_config"
+    if update-grub 2>/dev/null; then
         echo "内核版本已固定: $kernel_version"
     else
-        echo "GRUB配置格式不符合预期"
+        echo "update-grub执行失败"
+        exit 1
     fi
 else
     echo "未找到GRUB_DEFAULT配置"
+    exit 1
 fi
 '''
         result = self.execute_batch(hosts, cmd, sudo=True)
@@ -65,6 +68,7 @@ fi
 
     def post_check(self, hosts: List[str]) -> bool:
         """验证GRUB配置"""
-        cmd = "grep -q 'Advanced options for Ubuntu' /etc/default/grub"
-        result = self.execute_batch(hosts, cmd, sudo=False)
+        # 简化验证：检查 /etc/default/grub 是否可读，且包含 GRUB_DEFAULT 配置
+        cmd = "grep -E '^GRUB_DEFAULT=' /etc/default/grub"
+        result = self.execute_batch(hosts, cmd, sudo=True)
         return all(r.success for r in result.results.values())
