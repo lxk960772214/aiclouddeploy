@@ -1024,6 +1024,25 @@ network:
 
 ### RDMA 网卡重命名（旧格式，向后兼容）
 
+支持两种旧格式：
+
+**格式一：网卡列表方式**
+
+```yaml
+network:
+  compute_nics:
+    - mlx5_0
+    - mlx5_1
+    - mlx5_2
+    - mlx5_3
+  storage_nics:
+    - mlx5_10
+  management_nics:
+    - mlx5_bond_0
+```
+
+**格式二：模式匹配方式**
+
 ```yaml
 network:
   nics:
