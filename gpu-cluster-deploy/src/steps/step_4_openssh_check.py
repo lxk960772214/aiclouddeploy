@@ -78,7 +78,7 @@ class OpenSSHCheck(BaseStep):
         if vulnerable_hosts and self.versions.openssh.auto_upgrade:
             self.logger.warning(f"发现低版本OpenSSH主机: {vulnerable_hosts}，尝试升级...")
 
-            upgrade_cmd = "apt-get update && apt-get install -y openssh-client"
+            upgrade_cmd = "apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y openssh-client"
             upgrade_result = self.execute_batch(vulnerable_hosts, upgrade_cmd, sudo=True)
 
             # 重新检查
