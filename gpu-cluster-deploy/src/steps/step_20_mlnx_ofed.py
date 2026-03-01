@@ -70,11 +70,33 @@ class MellanoxDriver(BaseStep):
         self.logger.info(f"[{self.step_id}] 批量检测MLNX_OFED安装状态...")
         results = {}
 
+        def extract_version(version_str: str) -> Optional[str]:
+            """从版本字符串中提取版本号，处理各种格式"""
+            if not version_str:
+                return None
+            # 处理 MLNX_OFED_LINUX-23.10-2.1.3.1 格式
+            # 或 MLNX_OFED_LINUX-23.10-2.1.3.1-omg32.1ubuntu22.04 格式
+            import re
+            match = re.search(r'MLNX_OFED_LINUX-(\d+\.\d+-[\d.]+)', version_str)
+            if match:
+                return match.group(1)
+            # 处理纯版本号格式如 23.10-2.1.3.1
+            match = re.search(r'^(\d+\.\d+-[\d.]+)$', version_str.strip())
+            if match:
+                return match.group(1)
+            # 其他情况，尝试提取类似版本号的部分
+            match = re.search(r'(\d+\.\d+-[\d.]+)', version_str)
+            if match:
+                return match.group(1)
+            return version_str.strip()
+
         def detect_single(host: str) -> Tuple[str, bool, Optional[str]]:
             # 方法1: 使用 ofed_info 检测
             result = self.execute_on_host(host, "ofed_info -s 2>/dev/null | head -1", timeout=30)
             if result.get("success") and result.get("stdout", "").strip():
-                return host, True, result["stdout"].strip()
+                raw_version = result["stdout"].strip()
+                version = extract_version(raw_version)
+                return host, True, version or raw_version
 
             # 方法2: 检查 ibstat
             result = self.execute_on_host(host, "ibstat -V 2>/dev/null", timeout=30)
@@ -248,9 +270,11 @@ echo "UNINSTALL_DONE"
 
         mlnx_config = self.versions.mlnx_ofed
         target_version = mlnx_config.version
+        mode = getattr(mlnx_config, 'mode', 'install')
 
         self.logger.info("=" * 60)
         self.logger.info("MLNX_OFED驱动安装流程（批量模式）")
+        self.logger.info(f"模式: {mode}")
         self.logger.info(f"目标版本: {target_version}")
         self.logger.info(f"目标节点: {len(hosts)} 个")
         self.logger.info("=" * 60)
@@ -278,39 +302,44 @@ echo "UNINSTALL_DONE"
         # 2. 批量检测现有MLNX_OFED
         mlnx_status = self._detect_mlnx_batch(hosts_with_rdma)
 
-        # 分组：跳过、需要安装、需要卸载重装
+        # keep模式：保持现有版本，不安装
+        if mode == "keep":
+            for host, (has_mlnx, current_version) in mlnx_status.items():
+                if has_mlnx:
+                    self.logger.info(f"[{host}] MLNX_OFED已安装，版本: {current_version}，keep模式跳过")
+                    results[host] = {"success": True, "action": "kept", "current_version": current_version}
+                else:
+                    self.logger.info(f"[{host}] MLNX_OFED未安装，keep模式跳过")
+                    results[host] = {"success": True, "action": "skipped_no_install", "reason": "keep_mode"}
+
+            return StepResult(
+                step_id=self.step_id,
+                step_name=self.step_name,
+                status=StepStatus.SUCCESS,
+                message=f"MLNX_OFED keep模式，跳过安装",
+                host_results=results
+            )
+
+        # install模式：安装指定版本
         hosts_to_skip = []
-        hosts_to_uninstall = []
         hosts_to_install = []
 
-        target_parts = target_version.split('-')[0].split('.')
         for host, (has_mlnx, current_version) in mlnx_status.items():
             if has_mlnx and current_version:
-                current_parts = current_version.split('-')[0].split('.')
-                if len(current_parts) >= 2 and len(target_parts) >= 2:
-                    if current_parts[0] == target_parts[0] and current_parts[1] == target_parts[1]:
-                        self.logger.info(f"[{host}] MLNX_OFED主版本匹配，跳过安装: {current_version}")
-                        hosts_to_skip.append(host)
-                        results[host] = {"success": True, "action": "skipped_version_match", "current_version": current_version}
-                        continue
+                # 精确版本匹配则跳过
+                if current_version == target_version:
+                    self.logger.info(f"[{host}] MLNX_OFED版本匹配，跳过安装: {current_version}")
+                    hosts_to_skip.append(host)
+                    results[host] = {"success": True, "action": "skipped_version_match", "current_version": current_version}
+                    continue
 
-                self.logger.info(f"[{host}] 版本不匹配，需要卸载重装: 当前={current_version}, 目标={target_version}")
-                hosts_to_uninstall.append(host)
+                # 版本不匹配，需要安装（MLNX_OFED安装程序会自动处理旧版本）
+                self.logger.info(f"[{host}] 版本不匹配，需要安装: 当前={current_version}, 目标={target_version}")
+                hosts_to_install.append(host)
             else:
                 hosts_to_install.append(host)
 
-        self.logger.info(f"节点分组: 跳过={len(hosts_to_skip)}, 直接安装={len(hosts_to_install)}, 卸载重装={len(hosts_to_uninstall)}")
-
-        # 3. 批量卸载需要重装的节点
-        if hosts_to_uninstall:
-            uninstall_results = self._uninstall_mlnx_batch(hosts_to_uninstall)
-            # 卸载失败的节点标记为失败
-            for host, success in uninstall_results.items():
-                if not success:
-                    results[host] = {"success": False, "error": "卸载旧版本失败"}
-            # 卸载成功的节点加入安装列表
-            hosts_to_install.extend([h for h, success in uninstall_results.items() if success])
-            time.sleep(2)  # 等待系统稳定
+        self.logger.info(f"节点分组: 跳过={len(hosts_to_skip)}, 需要安装={len(hosts_to_install)}")
 
         if not hosts_to_install:
             self.logger.info("所有节点都已安装正确版本，无需操作")
@@ -322,7 +351,7 @@ echo "UNINSTALL_DONE"
                 host_results=results
             )
 
-        # 4. 准备安装包
+        # 3. 准备安装包
         self.logger.info("步骤1: 准备安装包...")
         package_paths = self._prepare_package(hosts_to_install)
 
@@ -341,7 +370,7 @@ echo "UNINSTALL_DONE"
                 host_results=results
             )
 
-        # 5. 批量安装依赖
+        # 4. 批量安装依赖
         deps_results = self._install_deps_batch(hosts_ready)
         hosts_deps_ok = [h for h, success in deps_results.items() if success]
         for host in hosts_ready:
@@ -357,7 +386,7 @@ echo "UNINSTALL_DONE"
                 host_results=results
             )
 
-        # 6. 批量安装MLNX_OFED
+        # 5. 批量安装MLNX_OFED（安装程序会自动处理旧版本）
         install_results = self._install_mlnx_batch(hosts_deps_ok, package_paths, target_version)
         results.update(install_results)
 

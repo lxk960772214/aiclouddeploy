@@ -9,147 +9,23 @@ from dataclasses import dataclass, field
 from pathlib import Path
 import re
 
-
-@dataclass
-class NodeAuthConfig:
-    """节点认证配置"""
-    auth_type: str = "key"  # key | password
-    username: str = "ubuntu"
-    private_key: Optional[str] = None
-    password: Optional[str] = None
-
-    def __post_init__(self):
-        self._validate()
-
-    def _validate(self):
-        if self.auth_type not in ["key", "password"]:
-            raise ValueError(f"认证类型必须是 'key' 或 'password', 当前: {self.auth_type}")
-        if self.auth_type == "key" and not self.private_key:
-            raise ValueError("密钥认证需要指定private_key路径")
-        if self.auth_type == "password" and not self.password:
-            raise ValueError("密码认证需要指定password")
-
-
-@dataclass
-class JumphostConfig:
-    """跳转服务器配置"""
-    host: str
-    port: int = 22
-    auth_type: str = "key"  # key | password
-    username: str = "ubuntu"
-    private_key: Optional[str] = None
-    password: Optional[str] = None
-    node_auth: Optional[NodeAuthConfig] = None  # 用于访问节点的认证配置
-
-    def __post_init__(self):
-        self._validate()
-
-    def _validate(self):
-        if not self.host:
-            raise ValueError("跳转服务器host不能为空")
-        if self.auth_type not in ["key", "password"]:
-            raise ValueError(f"认证类型必须是 'key' 或 'password', 当前: {self.auth_type}")
-        if self.auth_type == "key" and not self.private_key:
-            raise ValueError("密钥认证需要指定private_key路径")
-        if self.auth_type == "password" and not self.password:
-            raise ValueError("密码认证需要指定password")
-
-
-@dataclass
-class StorageConfig:
-    """存储配置"""
-    type: str = "single"  # single | raid1 | raid10
-    device: Optional[str] = None
-    devices: List[str] = field(default_factory=list)
-    mount_point: str = "/ssd"
-    filesystem: str = "ext4"
-    format_disk: bool = False  # 是否格式化磁盘（默认不格式化，防止数据丢失）
-
-    def __post_init__(self):
-        self._validate()
-
-    def _validate(self):
-        if self.type not in ["single", "raid1", "raid10"]:
-            raise ValueError(f"存储类型必须是 single/raid1/raid10, 当前: {self.type}")
-        # 注意：对于批量节点模板，device可以稍后指定，所以这里不强制验证
-        # if self.type == "single" and not self.device:
-        #     raise ValueError("单盘存储需要指定device")
-        if self.type in ["raid1", "raid10"] and len(self.devices) < 2:
-            raise ValueError(f"{self.type}需要至少2个设备")
-
-
-@dataclass
-class NodeConfig:
-    """集群节点配置"""
-    hostname: str
-    ip: str
-    roles: List[str] = field(default_factory=list)
-    storage: Optional[StorageConfig] = None
-
-    def __post_init__(self):
-        self._validate()
-
-    def _validate(self):
-        if not self.hostname:
-            raise ValueError("节点hostname不能为空")
-        if not self.ip:
-            raise ValueError("节点ip不能为空")
-        valid_roles = ["nfs_server", "time_server", "gpu_node"]
-        for role in self.roles:
-            if role not in valid_roles:
-                raise ValueError(f"无效的角色: {role}, 有效角色: {valid_roles}")
-
-
-@dataclass
-class NFSConfig:
-    """NFS配置"""
-    enabled: bool = True
-    server: Optional[str] = None
-    export_path: str = "/ssd/nfs"
-    client_mount: str = "/data"
-    client_ips: List[str] = field(default_factory=list)
-
-
-@dataclass
-class TimeSyncConfig:
-    """时间同步配置"""
-    server: Optional[str] = None
-    timezone: str = "Asia/Shanghai"
-
-
-@dataclass
-class NICConfig:
-    """网卡配置"""
-    pattern: str
-    count: int
-    net_prefix: str
-
-
-@dataclass
-class NICMappingConfig:
-    """网卡映射配置（简化版）"""
-    source_pattern: str  # 源名称模式
-    target_name: str  # 目标名称模板
-    nic_type: str = "unknown"  # rdma | ethernet | unknown
-    enabled: bool = True
-
-
-@dataclass
-class NICRenameConfigLoader:
-    """网卡重命名配置（用于配置加载器）"""
-    enabled: bool = False
-    mappings: List[NICMappingConfig] = field(default_factory=list)
-    create_udev_rules: bool = True
-    backup_original: bool = True
-    skip_if_exists: bool = True
-    dry_run: bool = False
-
-
-@dataclass
-class NetworkConfig:
-    """网络配置"""
-    nics: Dict[str, NICConfig] = field(default_factory=dict)
-    nic_rename: Optional[NICRenameConfigLoader] = None  # 网卡重命名配置
+# 从 models.cluster 导入模型类
+from src.models.cluster import (
+    NodeAuthConfig,
+    JumphostConfig,
+    StorageConfig,
+    NodeConfig,
+    NFSConfig,
+    TimeSyncConfig,
+    NetworkConfig,
+    NetworkTypeConfig,
+    IBWriteBWConfig,
+    NodeBatchConfig,
+    ClusterConfig,
+    NICConfig,
+    NICMappingConfig,
+    NICRenameConfig,
+)
 
 
 @dataclass
@@ -194,6 +70,7 @@ class NvidiaDriverConfig:
 @dataclass
 class MlnxOfedConfig:
     """MLNX_OFED配置"""
+    mode: str = "install"  # keep | install  keep=保持现有版本不安装, install=安装指定版本
     version: str = "24.10-2.1.8.0"
     file: Optional[str] = None
     download_url: Optional[str] = None
@@ -226,39 +103,6 @@ class VersionsConfig:
     kernel: KernelConfig = field(default_factory=KernelConfig)
     openssh: OpenSSHConfig = field(default_factory=OpenSSHConfig)
     nccl: NCCLConfig = field(default_factory=NCCLConfig)
-
-
-@dataclass
-class NodeBatchConfig:
-    """批量节点配置"""
-    enabled: bool = False
-    hosts_file: Optional[str] = None  # hosts格式文件路径
-    hosts_content: Optional[str] = None  # hosts格式内容
-    base_hostname_prefix: str = "node"  # 基础主机名前缀
-    base_ip_prefix: str = "10.0.0"  # 基础IP前缀
-    count: int = 0  # 批量节点数量
-    start_index: int = 1  # 起始索引
-    roles: List[str] = field(default_factory=list)  # 批量节点默认角色
-    storage_template: Optional[StorageConfig] = None  # 存储配置模板
-    auth_template: Optional[NodeAuthConfig] = None  # 认证配置模板
-
-
-@dataclass
-class ClusterConfig:
-    """集群完整配置"""
-    name: str = "gpu-cluster"
-    description: str = ""
-    jumphost: Optional[JumphostConfig] = None
-    nodes: List[NodeConfig] = field(default_factory=list)
-    node_batch: NodeBatchConfig = field(default_factory=NodeBatchConfig)  # 批量节点配置
-    nfs: NFSConfig = field(default_factory=NFSConfig)
-    time_sync: TimeSyncConfig = field(default_factory=TimeSyncConfig)
-    network: NetworkConfig = field(default_factory=NetworkConfig)
-
-    @property
-    def node_count(self) -> int:
-        """返回集群节点数量"""
-        return len(self.nodes)
 
 
 class ConfigLoader:
@@ -305,8 +149,22 @@ class ConfigLoader:
         if jumphost_raw:
             auth_raw = jumphost_raw.get("auth", {})
 
+            # 支持两种配置格式：
+            # 1. 嵌套格式: jumphost.auth.username/password
+            # 2. 扁平格式: jumphost.username/password (向后兼容)
+            auth_type = auth_raw.get("type") if auth_raw else jumphost_raw.get("auth_type", "key")
+            username = auth_raw.get("username") if auth_raw else None
+            if not username:
+                username = jumphost_raw.get("username", "ubuntu")
+            private_key = auth_raw.get("private_key") if auth_raw else None
+            if not private_key:
+                private_key = jumphost_raw.get("private_key")
+            password = auth_raw.get("password") if auth_raw else None
+            if not password:
+                password = jumphost_raw.get("password")
+
             # 解析节点认证配置
-            node_auth_raw = auth_raw.get("node_auth", {})
+            node_auth_raw = jumphost_raw.get("node_auth", {}) or (auth_raw.get("node_auth", {}) if auth_raw else {})
             node_auth = None
             if node_auth_raw:
                 node_auth = NodeAuthConfig(
@@ -319,10 +177,10 @@ class ConfigLoader:
             jumphost = JumphostConfig(
                 host=jumphost_raw.get("host", ""),
                 port=jumphost_raw.get("port", 22),
-                auth_type=auth_raw.get("type", "key"),
-                username=auth_raw.get("username", "ubuntu"),
-                private_key=auth_raw.get("private_key"),
-                password=auth_raw.get("password"),
+                auth_type=auth_type,
+                username=username,
+                private_key=private_key,
+                password=password,
                 node_auth=node_auth
             )
 
@@ -344,7 +202,10 @@ class ConfigLoader:
                 hostname=node_raw.get("hostname", ""),
                 ip=node_raw.get("ip", ""),
                 roles=node_raw.get("roles", []),
-                storage=storage
+                storage=storage,
+                username=node_raw.get("username"),
+                password=node_raw.get("password"),
+                private_key=node_raw.get("private_key")
             ))
 
         # 解析批量节点配置
@@ -406,6 +267,24 @@ class ConfigLoader:
 
         # 解析网络配置
         network_raw = raw.get("network", {})
+
+        # 解析新格式 - 独立网络类型配置
+        management = self._parse_network_type_config(network_raw.get("management"))
+        compute = self._parse_network_type_config(network_raw.get("compute"))
+        storage = self._parse_network_type_config(network_raw.get("storage"))
+
+        # 解析ib_write_bw测试参数
+        ib_write_bw_raw = network_raw.get("ib_write_bw", {})
+        ib_write_bw = None
+        if ib_write_bw_raw:
+            ib_write_bw = IBWriteBWConfig(
+                duration=ib_write_bw_raw.get("duration", 10),
+                size=ib_write_bw_raw.get("size", 65536),
+                port_base=ib_write_bw_raw.get("port_base", 18500),
+                min_bandwidth_percent=ib_write_bw_raw.get("min_bandwidth_percent", 90.0)
+            )
+
+        # 解析旧格式 - 向后兼容
         nics = {}
         for nic_name, nic_raw in network_raw.get("nics", {}).items():
             nics[nic_name] = NICConfig(
@@ -428,7 +307,7 @@ class ConfigLoader:
                 )
                 mappings.append(mapping)
 
-            nic_rename = NICRenameConfigLoader(
+            nic_rename = NICRenameConfig(
                 enabled=nic_rename_raw.get("enabled", False),
                 mappings=mappings,
                 create_udev_rules=nic_rename_raw.get("create_udev_rules", True),
@@ -437,7 +316,18 @@ class ConfigLoader:
                 dry_run=nic_rename_raw.get("dry_run", False)
             )
 
-        network = NetworkConfig(nics=nics, nic_rename=nic_rename)
+        network = NetworkConfig(
+            management=management,
+            compute=compute,
+            storage=storage,
+            ib_write_bw=ib_write_bw,
+            nics=nics,
+            nic_rename=nic_rename,
+            # 旧格式字段
+            compute_nics=network_raw.get("compute_nics", []),
+            storage_nics=network_raw.get("storage_nics", []),
+            management_nics=network_raw.get("management_nics", [])
+        )
 
         # 如果启用了批量节点配置，生成批量节点
         if node_batch.enabled:
@@ -682,6 +572,29 @@ class ConfigLoader:
 
         return list(node_dict.values())
 
+    def _parse_network_type_config(self, raw: Optional[Dict]) -> Optional[NetworkTypeConfig]:
+        """
+        解析单个网络类型配置
+
+        Args:
+            raw: 原始配置字典
+
+        Returns:
+            NetworkTypeConfig 或 None
+        """
+        if not raw:
+            return None
+
+        return NetworkTypeConfig(
+            description=raw.get("description", ""),
+            interfaces=raw.get("interfaces", []),
+            rdma_devices=raw.get("rdma_devices", []),
+            enabled=raw.get("enabled", True),
+            skip_performance_test=raw.get("skip_performance_test", False),
+            skip_inter_host_test=raw.get("skip_inter_host_test", False),
+            theoretical_bandwidth_gbps=raw.get("theoretical_bandwidth_gbps", 100.0)
+        )
+
     def _parse_versions_config(self, raw: Dict) -> VersionsConfig:
         """解析版本配置"""
         # 解析CUDA
@@ -709,6 +622,7 @@ class ConfigLoader:
         # 解析MLNX_OFED
         mlnx_raw = raw.get("mlnx_ofed", {})
         mlnx_ofed = MlnxOfedConfig(
+            mode=mlnx_raw.get("mode", "install"),
             version=mlnx_raw.get("version", "24.10-2.1.8.0"),
             file=mlnx_raw.get("file"),
             download_url=mlnx_raw.get("download_url"),
