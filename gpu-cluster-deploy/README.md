@@ -9,7 +9,9 @@ GPU 集群环境自动化部署工具，支持大规模 GPU 集群的批量配�
 | **跳转服务器支持** | 通过堡垒机访问内网集群，支持密钥/密码认证 |
 | **批量节点配置** | hosts 文件、模板生成、YAML 配置三种方式 |
 | **设备一致性检查** | 部署前检查 RDMA/GPU/NVMe 设备集群一致性 |
+| **网络测试模块** | 三轮测试策略定位异常 RDMA 设备，支持带宽测试和连通性检查 |
 | **模块化部署** | 按阶段/步骤/模块/分类/计划灵活执行 |
+| **安装包管理器** | 自动下载、分发、校验，支持 download_url 和 local_file 两种模式 |
 | **磁盘格式化选项** | 支持 single/RAID1/RAID10，可配置格式化策略 |
 | **多版本软件栈** | CUDA、NVIDIA 驱动、MLNX_OFED 版本可配置 |
 | **执行计划文件** | YAML 格式的执行计划导入导出 |
@@ -31,10 +33,12 @@ gpu-cluster-deploy/
 │   ├── config_loader.py             # 配置加载器
 │   ├── ssh_manager.py               # SSH 连接管理
 │   ├── batch_executor.py            # 批量命令执行
+│   ├── package_manager.py           # 安装包管理器
 │   ├── cli/                         # CLI 模块
 │   │   ├── main.py                  # CLI 主入口
 │   │   ├── execution_controller.py  # 执行控制器
-│   │   └── progress_reporter.py     # 进度报告器
+│   │   ├── progress_reporter.py     # 进度报告器
+│   │   └── network_test_cli.py      # 网络测试 CLI
 │   ├── deployment/                  # 部署框架
 │   │   ├── core.py                  # 核心类定义
 │   │   ├── module_manager.py        # 模块管理器
@@ -53,10 +57,19 @@ gpu-cluster-deploy/
 │   │   ├── nic_mapper.py            # 网卡映射
 │   │   ├── nic_renamer.py           # 网卡重命名
 │   │   ├── ibdev_parser.py          # IB 设备解析
-│   │   └── fix_suggestions.py       # 修复建议生成
+│   │   ├── fix_suggestions.py       # 修复建议生成
+│   │   ├── connectivity_checker.py  # 网络连通性检查
+│   │   ├── rdma_detector.py         # RDMA 设备检测
+│   │   ├── ibandwidth_tester.py     # IB 带宽测试
+│   │   ├── three_phase_tester.py    # 三轮测试策略
+│   │   ├── ip_resolver.py           # IP 解析器
+│   │   └── deployment_verifier.py   # 部署验证器
 │   ├── steps/                       # 部署步骤实现
 │   │   ├── base.py                  # 步骤基类
 │   │   ├── step_0_device_check.py   # 设备一致性检查
+│   │   ├── step_0b_network_check.py # 网络连通性检查
+│   │   ├── step_0c_network_rdma_test.py # RDMA 网络测试
+│   │   ├── step_final_verification.py # 部署验证
 │   │   ├── step_1_dependencies.py   # 依赖安装
 │   │   ├── step_2_kernel_check.py   # 内核检查
 │   │   ├── step_3_glibc_check.py    # glibc 检查
@@ -98,6 +111,8 @@ gpu-cluster-deploy/
 │   ├── test_device_check.py         # 设备检查测试
 │   ├── test_module_manager.py       # 模块管理测试
 │   ├── test_network_config.py       # 网络配置测试
+│   ├── test_connectivity_checker.py # 连通性检查测试
+│   ├── test_network_modules.py      # 网络模块测试
 │   ├── test_cli.py                  # CLI 测试
 │   └── integration/                 # 集成测试
 ├── logs/                            # 日志输出目录
@@ -537,6 +552,84 @@ python src/main.py --new-cli --category gpu --parallel --max-parallel 4
 python src/main.py --new-cli --plan config/plans/full.yaml --continue-on-error
 ```
 
+### 网络测试模块
+
+提供独立的网络测试工具，用于验证 RDMA 网络配置和定位异常设备。
+
+#### 三轮测试策略
+
+通过三轮测试精确定位异常网络设备：
+
+1. **第一轮：相邻配对测试** - 测试 (1,2), (3,4), ...
+2. **第二轮：错位配对测试** - 测试 (2,3), (4,5), ...
+3. **第三轮：异常定位** - 使用正常主机定位异常设备
+
+#### 网络测试 CLI
+
+```bash
+# 测试所有主机的 RDMA 网络
+python -m src.cli.network_test_cli --config config/cluster.yaml
+
+# 测试指定主机
+python -m src.cli.network_test_cli --config config/cluster.yaml --hosts node01,node02
+
+# 指定网络类型
+python -m src.cli.network_test_cli --config config/cluster.yaml --network compute
+
+# 生成 HTML 报告
+python -m src.cli.network_test_cli --config config/cluster.yaml --format html --output report.html
+
+# JSON 输出
+python -m src.cli.network_test_cli --config config/cluster.yaml --format json --output results.json
+```
+
+#### 连通性检查
+
+在部署前检查各节点的网络连通性：
+
+```bash
+# IP 层连通性（ping 8.8.8.8）
+# DNS 解析（ping www.baidu.com）
+# HTTP 连接（curl http://www.baidu.com）
+```
+
+### 安装包管理器
+
+自动管理安装包的下载、分发和校验。
+
+#### 双模式分发
+
+| 模式 | 配置字段 | 描述 |
+|------|----------|------|
+| 登录服务器下载 | `download_url` | 在登录服务器下载后分发到 GPU 节点 |
+| 本机文件上传 | `local_file` | 从本机上传到登录服务器再分发 |
+
+#### 配置示例
+
+```yaml
+# 方式一：登录服务器下载（推荐）
+cuda:
+  version: "12.8"
+  download_url: "https://developer.download.nvidia.com/compute/cuda/12.8.0/local_installers/cuda_12.8.0_570.86.10_linux.run"
+
+# 方式二：本机文件上传
+nvidia_driver:
+  version: "590.48.01"
+  local_file: "/home/user/software/NVIDIA-Linux-x86_64-590.48.01.run"
+
+# 方式三：集群节点已有文件
+mlnx_ofed:
+  version: "24.10-2.1.8.0"
+  local_file: "/opt/software/MLNX_OFED_LINUX-24.10-2.1.8.0-ubuntu22.04-x86_64.tgz"
+```
+
+#### 分发流程
+
+1. 检查各节点是否已有文件
+2. 在登录服务器准备文件（下载或上传）
+3. 从登录服务器分发到 GPU 节点
+4. 如果登录服务器同时是 GPU 节点，自动跳过传输
+
 ### 设备一致性检查
 
 部署前自动检查所有节点的设备一致性：
@@ -740,6 +833,34 @@ python src/main.py --output markdown
 python src/main.py --output json --output-file report.json
 ```
 
+### 网络测试命令
+
+```bash
+# 测试所有主机的 RDMA 网络
+python -m src.cli.network_test_cli --config config/cluster.yaml
+
+# 测试指定主机
+python -m src.cli.network_test_cli --config config/cluster.yaml --hosts node01,node02
+
+# 指定网络类型（compute/storage/all）
+python -m src.cli.network_test_cli --config config/cluster.yaml --network compute
+
+# 指定测试轮次（1/2/3）
+python -m src.cli.network_test_cli --config config/cluster.yaml --rounds 3
+
+# 生成 HTML 报告
+python -m src.cli.network_test_cli --config config/cluster.yaml --format html --output report.html
+
+# JSON 格式输出
+python -m src.cli.network_test_cli --config config/cluster.yaml --format json
+
+# 详细输出模式
+python -m src.cli.network_test_cli --config config/cluster.yaml --verbose
+
+# 模拟运行（不执行实际测试）
+python -m src.cli.network_test_cli --config config/cluster.yaml --dry-run
+```
+
 ### 子命令
 
 ```bash
@@ -772,7 +893,7 @@ python src/main.py export --format json --output plan.json
 
 | 分组 | 步骤范围 | 描述 |
 |------|----------|------|
-| 0 | 00 | 设备一致性检查 |
+| 0 | 00-0c | 预检查（设备一致性、网络连通性、RDMA 测试） |
 | A | 01-04 | 系统检查（依赖、内核、glibc、OpenSSH） |
 | B | 05-09 | 基础配置（sudo、磁盘、MSR、rc.local、主机名） |
 | C | 10-13 | 用户与 SSH（用户创建、密钥、CPU 性能、文件限制） |
@@ -780,12 +901,15 @@ python src/main.py export --format json --output plan.json
 | E | 20-23 | 网络驱动（MLNX_OFED、nouveau、NVIDIA 驱动、Fabric Manager） |
 | F | 24-28 | GPU 环境（CUDA、NCCL、RDMA 重命名、GPU 持久化、内核模块） |
 | G | 29-34 | 高级配置（ACS、时间同步、NFS） |
+| H | final | 部署验证（服务状态、网络配置验证） |
 
 ### 详细步骤说明
 
 | 步骤 | 名称 | 描述 | 需要 Sudo | 需要重启 |
 |------|------|------|-----------|----------|
 | 00 | 设备一致性检查 | 检查集群设备一致性 | 否 | 否 |
+| 0b | 网络连通性检查 | 检查 IP/DNS/HTTP 连通性 | 否 | 否 |
+| 0c | RDMA 网络测试 | 三轮测试定位异常网络设备 | 否 | 否 |
 | 01 | 依赖安装 | 安装基础依赖包 | 是 | 否 |
 | 02 | 内核检查 | 检查内核版本兼容性 | 是 | 可能 |
 | 03 | glibc 检查 | 检查 glibc 版本 | 否 | 否 |
@@ -816,6 +940,7 @@ python src/main.py export --format json --output plan.json
 | 29 | 禁用 ACS | 禁用 ACS（GPU Direct RDMA） | 是 | 是 |
 | 30 | 时间同步 | 配置 NTP 时间同步 | 是 | 否 |
 | 34 | NFS 配置 | 配置 NFS 服务端/客户端 | 是 | 否 |
+| final | 部署验证 | 验证部署结果和服务状态 | 否 | 否 |
 
 ## 模块分类
 
@@ -1038,11 +1163,12 @@ pytest tests/test_ssh_manager.py::TestSSHManager::test_connect -v
 
 ## 注意事项
 
-1. **驱动安装文件** - 需要预先下载 NVIDIA 驱动、CUDA Toolkit、MLNX_OFED 安装包
-2. **重启要求** - 步骤 20、21、22、29 执行后需要重启
-3. **磁盘数据** - `format_disk` 默认为 false，防止意外数据丢失
-4. **网络环境** - 确保跳转服务器和内网节点网络可达
-5. **向后兼容** - 新功能保持向后兼容，旧配置文件无需修改
+1. **安装包管理** - 支持 `download_url` 在登录服务器下载，或 `local_file` 从本机上传
+2. **网络测试** - 部署前后可使用 `network_test_cli` 验证 RDMA 网络状态
+3. **重启要求** - 步骤 20、21、22、29 执行后需要重启
+4. **磁盘数据** - `format_disk` 默认为 false，防止意外数据丢失
+5. **网络环境** - 确保跳转服务器和内网节点网络可达
+6. **向后兼容** - 新功能保持向后兼容，旧配置文件无需修改
 
 ## 许可证
 
