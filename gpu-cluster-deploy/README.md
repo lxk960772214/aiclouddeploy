@@ -954,7 +954,75 @@ python src/main.py export --format json --output plan.json
 
 ## 网络配置
 
-### RDMA 网卡重命名
+### 网络类型配置（新格式）
+
+支持按网络类型配置网卡和 RDMA 设备，用于网络测试和验证：
+
+```yaml
+network:
+  # ib_write_bw 测试参数
+  ib_write_bw:
+    duration: 10              # 测试持续时间(秒)
+    size: 65536               # 测试数据块大小(字节)
+    port_base: 18500          # 基础端口号
+    min_bandwidth_percent: 90 # 最低带宽百分比要求
+
+  # 管理网络 (25G bond网络)
+  management:
+    description: "管理网络 (25G bond网络)"
+    interfaces:
+      - ens19f0np0
+    rdma_devices:
+      - mlx5_bond_0
+    enabled: true
+    skip_performance_test: true   # 管理网通常跳过性能测试
+    skip_inter_host_test: true    # 管理网跳过跨主机测试
+    theoretical_bandwidth_gbps: 25
+
+  # 计算网络 (400G RoCE网络)
+  compute:
+    description: "计算网络 (400G RoCE网络)"
+    interfaces:
+      - ens11np0
+      - ens12np0
+      - ens13np0
+      - ens14np0
+    rdma_devices:
+      - mlx5_0
+      - mlx5_1
+      - mlx5_2
+      - mlx5_3
+    enabled: true
+    skip_performance_test: false
+    skip_inter_host_test: false
+    theoretical_bandwidth_gbps: 400
+
+  # 存储网络 (200G RoCE网络)
+  storage:
+    description: "存储网络 (200G RoCE网络)"
+    interfaces:
+      - ens22np0
+    rdma_devices:
+      - mlx5_10
+    enabled: true
+    skip_performance_test: false
+    skip_inter_host_test: false
+    theoretical_bandwidth_gbps: 200
+```
+
+**网络类型配置字段说明：**
+
+| 字段 | 类型 | 描述 |
+|------|------|------|
+| `description` | string | 网络描述 |
+| `interfaces` | list | 网络接口名称列表 |
+| `rdma_devices` | list | RDMA 设备名称列表 (如 mlx5_0) |
+| `enabled` | bool | 是否启用此网络 |
+| `skip_performance_test` | bool | 是否跳过性能测试 |
+| `skip_inter_host_test` | bool | 是否跳过跨主机测试 |
+| `theoretical_bandwidth_gbps` | int | 理论带宽 (Gbps)，用于验证测试结果 |
+
+### RDMA 网卡重命名（旧格式，向后兼容）
 
 ```yaml
 network:
