@@ -74,9 +74,19 @@ class KernelInstall(BaseStep):
     requires_sudo = True
     supports_batch = True
     requires_reboot = True
+    can_skip = True  # 可以跳过
 
     def execute(self, hosts: List[str]) -> StepResult:
         """执行内核安装"""
+        # 检查是否有 versions 配置
+        if not hasattr(self, 'versions') or self.versions is None:
+            return StepResult(
+                step_id=self.step_id,
+                step_name=self.step_name,
+                status=StepStatus.SKIPPED,
+                message="未配置版本信息，跳过内核安装"
+            )
+
         kernel_config = self.versions.kernel
 
         if kernel_config.mode == "keep":
@@ -114,7 +124,7 @@ class KernelInstall(BaseStep):
 
         # 安装内核包
         pkg_list = " ".join(packages)
-        install_cmd = f"apt install -y {pkg_list}"
+        install_cmd = f"DEBIAN_FRONTEND=noninteractive apt install -y {pkg_list}"
         result = self.execute_batch(hosts, install_cmd, sudo=True)
 
         failed = [h for h, r in result.results.items() if not r.success]

@@ -34,6 +34,45 @@ class InstallDependencies(BaseStep):
         ["libvulkan1", "mesa-vulkan-drivers", "vulkan-tools", "libglvnd-dev"]
     ]
 
+    # 关键包列表（用于配置检查）
+    KEY_PACKAGES = [
+        "build-essential", "gcc", "make", "dkms", "pdsh", "git", "cmake"
+    ]
+
+    def is_configured(self, host: str) -> tuple:
+        """
+        检查依赖包是否已安装
+
+        Args:
+            host: 主机地址
+
+        Returns:
+            tuple[bool, str]: (是否已配置, 检查详情)
+        """
+        # 检查关键包是否全部安装
+        check_cmd = "dpkg -l " + " ".join(self.KEY_PACKAGES) + " 2>/dev/null | grep -c '^ii' || echo 0"
+        result = self.execute_on_host(host, check_cmd)
+
+        if result["success"]:
+            try:
+                count = int(result["stdout"].strip())
+                if count >= len(self.KEY_PACKAGES):
+                    return True, f"所有 {len(self.KEY_PACKAGES)} 个关键依赖包已安装"
+            except ValueError:
+                pass
+
+        # 检查缺失的包
+        missing = []
+        for pkg in self.KEY_PACKAGES:
+            check = self.execute_on_host(host, f"dpkg -l {pkg} 2>/dev/null | grep -q '^ii'")
+            if not check["success"]:
+                missing.append(pkg)
+
+        if missing:
+            return False, f"缺失依赖包: {', '.join(missing[:5])}{'...' if len(missing) > 5 else ''}"
+
+        return False, "依赖包检查失败"
+
     def execute(self, hosts: List[str]) -> StepResult:
         """执行安装"""
         all_results = {}
@@ -41,7 +80,7 @@ class InstallDependencies(BaseStep):
 
         # 1. 更新apt缓存
         self.logger.info("更新apt缓存...")
-        update_cmd = "apt update -y"
+        update_cmd = "DEBIAN_FRONTEND=noninteractive apt update -y"
         update_result = self.execute_batch(hosts, update_cmd, sudo=True)
 
         failed_hosts = [h for h, r in update_result.results.items() if not r.success]
@@ -51,17 +90,19 @@ class InstallDependencies(BaseStep):
                 step_name=self.step_name,
                 status=StepStatus.FAILED,
                 message=f"apt update失败: {failed_hosts}",
-                host_results=update_result.results
+                host_results={h: {"success": r.success, "stdout": r.stdout, "stderr": r.stderr}
+                             for h, r in update_result.results.items()}
             )
 
         # 2. 分组安装依赖包
         for i, packages in enumerate(self.PACKAGE_GROUPS):
             self.logger.info(f"安装依赖包组 {i+1}/{len(self.PACKAGE_GROUPS)}...")
             pkg_list = " ".join(packages)
-            install_cmd = f"apt install -y {pkg_list}"
+            install_cmd = f"DEBIAN_FRONTEND=noninteractive apt install -y {pkg_list}"
 
             result = self.execute_batch(hosts, install_cmd, sudo=True)
-            all_results[f"group_{i+1}"] = result.results
+            all_results[f"group_{i+1}"] = {h: {"success": r.success, "stdout": r.stdout}
+                                           for h, r in result.results.items()}
 
             failed = [h for h, r in result.results.items() if not r.success]
             if failed:
