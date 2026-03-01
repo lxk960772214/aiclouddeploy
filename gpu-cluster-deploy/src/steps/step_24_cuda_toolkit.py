@@ -221,9 +221,11 @@ grep -q 'export LD_LIBRARY_PATH=/usr/local/cuda/lib64' /etc/profile || echo "exp
 
         cuda_config = self.versions.cuda
         target_version = cuda_config.version
+        mode = getattr(cuda_config, 'mode', 'install')
 
         self.logger.info("=" * 60)
         self.logger.info("CUDA Toolkit安装流程（批量模式）")
+        self.logger.info(f"模式: {mode}")
         self.logger.info(f"目标版本: {target_version}")
         self.logger.info(f"目标节点: {len(hosts)} 个")
         self.logger.info("=" * 60)
@@ -231,7 +233,25 @@ grep -q 'export LD_LIBRARY_PATH=/usr/local/cuda/lib64' /etc/profile || echo "exp
         # 1. 批量检测现有CUDA
         cuda_status = self._detect_cuda_batch(hosts)
 
-        # 分组：跳过、需要安装、需要卸载重装
+        # keep模式：保持现有版本，不安装
+        if mode == "keep":
+            for host, (has_cuda, current_version) in cuda_status.items():
+                if has_cuda:
+                    self.logger.info(f"[{host}] CUDA已安装，版本: {current_version}，keep模式跳过")
+                    results[host] = {"success": True, "action": "kept", "current_version": current_version}
+                else:
+                    self.logger.info(f"[{host}] CUDA未安装，keep模式跳过")
+                    results[host] = {"success": True, "action": "skipped_no_install", "reason": "keep_mode"}
+
+            return StepResult(
+                step_id=self.step_id,
+                step_name=self.step_name,
+                status=StepStatus.SUCCESS,
+                message=f"CUDA keep模式，跳过安装",
+                host_results=results
+            )
+
+        # install模式：安装指定版本
         hosts_to_skip = []
         hosts_to_uninstall = []
         hosts_to_install = []

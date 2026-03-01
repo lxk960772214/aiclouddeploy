@@ -48,6 +48,7 @@ class KernelConfig:
 @dataclass
 class CudaConfig:
     """CUDA配置"""
+    mode: str = "install"  # keep | install  keep=保持现有版本不安装, install=安装指定版本
     version: str = "12.8"
     toolkit_file: Optional[str] = None
     download_url: Optional[str] = None
@@ -59,6 +60,7 @@ class CudaConfig:
 @dataclass
 class NvidiaDriverConfig:
     """NVIDIA驱动配置"""
+    mode: str = "install"  # keep | install  keep=保持现有版本不安装, install=安装指定版本
     version: str = "590.48.01"
     file: Optional[str] = None
     download_url: Optional[str] = None
@@ -600,6 +602,7 @@ class ConfigLoader:
         # 解析CUDA
         cuda_raw = raw.get("cuda", {})
         cuda = CudaConfig(
+            mode=cuda_raw.get("mode", "install"),
             version=cuda_raw.get("version", "12.8"),
             toolkit_file=cuda_raw.get("toolkit_file"),
             download_url=cuda_raw.get("download_url"),
@@ -611,6 +614,7 @@ class ConfigLoader:
         # 解析NVIDIA驱动
         driver_raw = raw.get("nvidia_driver", {})
         nvidia_driver = NvidiaDriverConfig(
+            mode=driver_raw.get("mode", "install"),
             version=driver_raw.get("version", "590.48.01"),
             file=driver_raw.get("file"),
             download_url=driver_raw.get("download_url"),

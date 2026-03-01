@@ -309,9 +309,11 @@ lsmod | grep nvidia || echo "UNINSTALL_DONE"
 
         driver_config = self.versions.nvidia_driver
         target_version = driver_config.version
+        mode = getattr(driver_config, 'mode', 'install')
 
         self.logger.info("=" * 60)
         self.logger.info("NVIDIA驱动安装流程（批量模式）")
+        self.logger.info(f"模式: {mode}")
         self.logger.info(f"目标版本: {target_version}")
         self.logger.info(f"目标节点: {len(hosts)} 个")
         self.logger.info("=" * 60)
@@ -319,7 +321,25 @@ lsmod | grep nvidia || echo "UNINSTALL_DONE"
         # 1. 批量检测现有驱动
         driver_status = self._detect_driver_batch(hosts)
 
-        # 分组：跳过、需要安装、需要卸载重装
+        # keep模式：保持现有版本，不安装
+        if mode == "keep":
+            for host, (has_driver, current_version) in driver_status.items():
+                if has_driver:
+                    self.logger.info(f"[{host}] NVIDIA驱动已安装，版本: {current_version}，keep模式跳过")
+                    results[host] = {"success": True, "action": "kept", "current_version": current_version}
+                else:
+                    self.logger.info(f"[{host}] NVIDIA驱动未安装，keep模式跳过")
+                    results[host] = {"success": True, "action": "skipped_no_install", "reason": "keep_mode"}
+
+            return StepResult(
+                step_id=self.step_id,
+                step_name=self.step_name,
+                status=StepStatus.SUCCESS,
+                message=f"NVIDIA驱动 keep模式，跳过安装",
+                host_results=results
+            )
+
+        # install模式：安装指定版本
         hosts_to_skip = []
         hosts_to_uninstall = []
         hosts_to_install = []
