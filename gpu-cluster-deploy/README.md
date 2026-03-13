@@ -80,7 +80,7 @@ gpu-cluster-deploy/
 │   │   ├── step_8_rc_local.py       # rc.local 配置
 │   │   ├── step_9_hostname_hosts.py # 主机名配置
 │   │   ├── step_10_create_user.py   # 用户创建
-│   │   ├── step_11_ssh_key.py       # SSH 密钥配置
+│   │   ├── step_0d_ssh_key.py       # SSH 免密配置
 │   │   ├── step_12_cpu_performance.py # CPU 性能模式
 │   │   ├── step_13_file_limits.py   # 文件描述符限制
 │   │   ├── step_15_disable_autoupdate.py # 禁用自动更新
@@ -142,6 +142,15 @@ pip install -r requirements.txt
 cluster:
   name: "gpu-cluster-001"
   description: "生产环境GPU集群"
+  deploy_user: "ubuntu"     # 部署用户（可选，默认使用登录用户）
+
+# SSH 免密配置（可选）
+ssh_key:
+  enabled: true             # 是否启用免密配置（默认 true）
+  users:                    # 要配置免密的用户列表（可选，默认自动检测部署用户）
+    - ubuntu
+  # private_key: "~/.ssh/id_rsa"  # 指定私钥路径（可选）
+  # public_key: "~/.ssh/id_rsa.pub"  # 指定公钥路径（可选）
 
 # 跳转服务器配置
 jumphost:
@@ -174,6 +183,8 @@ nodes:
   # NFS Server 节点
   - hostname: "gpu-master"
     ip: "10.254.43.65"
+    username: "root"        # 登录用户（必须指定）
+    password: "root-password"  # 登录密码或私钥
     roles:
       - nfs_server
       - time_server
@@ -194,6 +205,8 @@ nodes:
   # GPU 计算节点
   - hostname: "gpu-node-01"
     ip: "10.254.43.66"
+    username: "root"        # 登录用户
+    password: "root-password"
     roles:
       - gpu_node
     storage:
@@ -205,10 +218,10 @@ nodes:
   # 不同密码的节点示例
   - hostname: "gpu-node-02"
     ip: "10.254.43.67"
+    username: "root"        # 登录用户
+    password: "different-pwd" # 不同的密码
     roles:
       - gpu_node
-    username: "admin"        # 不同的用户名
-    password: "different-pwd" # 不同的密码
     storage:
       type: "single"
       device: "/dev/nvme0n1"
@@ -336,6 +349,11 @@ python src/main.py --new-cli --plan config/plans/gpu-only.yaml
 node_batch:
   enabled: true
   hosts_file: "/path/to/hosts/file"  # hosts 格式文件路径
+  auth_template:            # 登录用户配置（必须指定）
+    username: "root"
+    password: "root-password"
+    # 或使用私钥
+    # private_key: "~/.ssh/id_rsa"
   roles:
     - gpu_node
   storage_template:
@@ -360,6 +378,9 @@ hosts 文件格式：
 ```yaml
 node_batch:
   enabled: true
+  auth_template:            # 登录用户配置
+    username: "root"
+    password: "root-password"
   hosts_content: |
     # 批量GPU节点配置
     10.254.43.66 gpu-node-01
@@ -376,6 +397,9 @@ node_batch:
   base_ip_prefix: "10.254.43"
   count: 5                  # 生成5个节点
   start_index: 66           # 起始索引为66
+  auth_template:            # 登录用户配置
+    username: "root"
+    password: "root-password"
   roles:
     - gpu_node
   storage_template:
@@ -404,6 +428,45 @@ nodes_override:
 ### SSH 认证配置
 
 支持灵活的SSH认证配置，适应不同安全场景：
+
+#### 登录用户与部署用户
+
+系统区分两种用户角色：
+
+| 用户角色 | 说明 | 配置位置 |
+|----------|------|----------|
+| **登录用户** | 用于初始连接节点，必须有密码或密钥认证 | `nodes[].username` 或 `jumphost.node_auth.username` |
+| **部署用户** | 部署过程中使用的目标用户，可自动配置免密登录 | `cluster.deploy_user`（可选） |
+
+**典型场景：**
+
+```yaml
+cluster:
+  name: "gpu-cluster"
+  deploy_user: "ubuntu"    # 部署用户（可选，默认使用登录用户）
+
+jumphost:
+  host: "1.2.3.4"
+  username: "ubuntu"
+  password: "jumphost-password"
+  node_auth:
+    username: "root"       # 登录用户（有 root 密码）
+    password: "root-password"
+
+nodes:
+  - hostname: "gpu-node-01"
+    ip: "10.0.1.10"
+    username: "root"        # 登录用户（必须指定）
+    password: "root-password"
+    # 部署时会自动创建 deploy_user (ubuntu) 并配置 sudo 免密
+```
+
+**执行流程：**
+
+1. **Phase 0** (step_00, step_0b): 使用**登录用户**连接（部署用户可能不存在）
+2. **Phase 1** (step_0d): 使用**登录用户**配置 SSH 免密
+   - 如果 deploy_user ≠ login_user，自动创建 deploy_user 并配置 sudo 免密
+3. **Phase 2+**: 使用**部署用户**免密连接
 
 #### 跳转服务器认证
 
@@ -503,16 +566,17 @@ jumphost:
 
 # 节点列表
 nodes:
-  # 使用默认 node_auth 密码的节点
   - hostname: "node-01"
     ip: "10.0.1.10"
+    username: "root"        # 登录用户（必须指定）
+    password: "root-password"
     roles: [gpu_node]
 
-  # 使用特殊密码的节点
   - hostname: "node-02"
     ip: "10.0.1.11"
+    username: "root"        # 登录用户（必须指定）
+    password: "your-special-password"
     roles: [gpu_node]
-    password: "your-special-password"  # 覆盖默认密码
 ```
 
 ### 部署参数配置
@@ -665,6 +729,9 @@ network:
 ```yaml
 nodes:
   - hostname: "gpu-node-01"
+    ip: "10.254.43.66"
+    username: "root"           # 登录用户（必须指定）
+    password: "root-password"
     storage:
       type: "single"           # single | raid1 | raid10
       device: "/dev/nvme0n1"   # single 模式
@@ -673,6 +740,9 @@ nodes:
       format_disk: true        # 是否格式化（默认 false）
 
   - hostname: "gpu-master"
+    ip: "10.254.43.65"
+    username: "root"
+    password: "root-password"
     storage:
       type: "raid10"           # RAID10 模式
       devices:
@@ -907,9 +977,10 @@ python src/main.py export --format json --output plan.json
 
 | 步骤 | 名称 | 描述 | 需要 Sudo | 需要重启 |
 |------|------|------|-----------|----------|
-| 00 | 设备一致性检查 | 检查集群设备一致性 | 否 | 否 |
-| 0b | 网络连通性检查 | 检查 IP/DNS/HTTP 连通性 | 否 | 否 |
+| 00 | 设备一致性检查 | 检查集群设备一致性（使用登录用户） | 否 | 否 |
+| 0b | 网络连通性检查 | 检查 IP/DNS/HTTP 连通性（使用登录用户） | 否 | 否 |
 | 0c | RDMA 网络测试 | 三轮测试定位异常网络设备 | 否 | 否 |
+| 0d | SSH 免密配置 | 配置 SSH 免密登录（使用登录用户） | 是 | 否 |
 | 01 | 依赖安装 | 安装基础依赖包 | 是 | 否 |
 | 02 | 内核检查 | 检查内核版本兼容性 | 是 | 可能 |
 | 03 | glibc 检查 | 检查 glibc 版本 | 否 | 否 |
@@ -920,7 +991,6 @@ python src/main.py export --format json --output plan.json
 | 08 | rc.local | 配置开机启动脚本 | 是 | 否 |
 | 09 | 主机名/hosts | 配置主机名和 hosts 解析 | 是 | 否 |
 | 10 | 创建用户 | 创建部署用户 | 是 | 否 |
-| 11 | SSH 密钥 | 配置 SSH 密钥认证 | 是 | 否 |
 | 12 | CPU 性能 | 设置 CPU 性能模式 | 是 | 否 |
 | 13 | 文件限制 | 配置文件描述符限制 | 是 | 否 |
 | 15 | 禁用自动更新 | 禁用系统自动更新 | 是 | 否 |
