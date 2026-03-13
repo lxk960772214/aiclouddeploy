@@ -41,6 +41,74 @@ class TestSSHResult(unittest.TestCase):
         )
         self.assertFalse(result.success)
 
+    def test_get_method(self):
+        """测试 get 方法（字典式访问）"""
+        result = SSHResult(
+            success=True,
+            exit_code=0,
+            stdout="output",
+            stderr="error",
+            host="192.168.1.1",
+            command="echo test",
+            duration=1.5
+        )
+        # 测试获取存在的属性
+        self.assertTrue(result.get("success"))
+        self.assertEqual(result.get("stdout"), "output")
+        self.assertEqual(result.get("stderr"), "error")
+        self.assertEqual(result.get("exit_code"), 0)
+        self.assertEqual(result.get("host"), "192.168.1.1")
+        self.assertEqual(result.get("command"), "echo test")
+        self.assertEqual(result.get("duration"), 1.5)
+
+        # 测试获取不存在的属性，返回默认值
+        self.assertIsNone(result.get("nonexistent"))
+        self.assertEqual(result.get("nonexistent", "default"), "default")
+
+    def test_to_dict_method(self):
+        """测试 to_dict 方法"""
+        result = SSHResult(
+            success=True,
+            exit_code=0,
+            stdout="output",
+            stderr="error",
+            host="192.168.1.1",
+            command="echo test",
+            duration=1.5
+        )
+        result_dict = result.to_dict()
+        self.assertEqual(result_dict["success"], True)
+        self.assertEqual(result_dict["exit_code"], 0)
+        self.assertEqual(result_dict["stdout"], "output")
+        self.assertEqual(result_dict["stderr"], "error")
+        self.assertEqual(result_dict["host"], "192.168.1.1")
+        self.assertEqual(result_dict["command"], "echo test")
+        self.assertEqual(result_dict["duration"], 1.5)
+
+    def test_str_method(self):
+        """测试字符串表示"""
+        result_success = SSHResult(
+            success=True,
+            exit_code=0,
+            stdout="output",
+            stderr="",
+            host="192.168.1.1",
+            command="echo test",
+            duration=1.5
+        )
+        self.assertIn("✓", str(result_success))
+        self.assertIn("192.168.1.1", str(result_success))
+
+        result_failure = SSHResult(
+            success=False,
+            exit_code=1,
+            stdout="",
+            stderr="error",
+            host="192.168.1.2",
+            command="false"
+        )
+        self.assertIn("✗", str(result_failure))
+
 
 class TestSSHManager(unittest.TestCase):
     """SSH管理器测试"""

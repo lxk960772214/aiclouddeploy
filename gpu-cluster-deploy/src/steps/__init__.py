@@ -67,6 +67,10 @@ STEP_METADATA = {
     "step_34": {"category": StepCategory.STORAGE, "tags": ["nfs", "mount", "storage"]},
     # Device check (step_0)
     "step_0": {"category": StepCategory.SYSTEM, "tags": ["device", "check", "validation"]},
+    # Network connectivity check (step_0b)
+    "step_0b": {"category": StepCategory.NETWORK, "tags": ["network", "connectivity", "check"]},
+    # RDMA network test (step_0c)
+    "step_0c": {"category": StepCategory.NETWORK, "tags": ["rdma", "bandwidth", "test"]},
 }
 
 
@@ -129,49 +133,65 @@ from .step_34_nfs_config import NFSConfig
 # Device check step
 from .step_0_device_check import Step0DeviceCheck
 
+# Network connectivity check step
+from .step_0b_network_check import NetworkCheckStep
 
-# 所有步骤类
+# RDMA network test step
+from .step_0c_network_rdma_test import NetworkRDMATest
+
+# Final verification step
+from .step_final_verification import FinalVerification
+
+
+# 所有步骤类 - 按依赖顺序排列
+# 重要：
+# 1. SSH免密(step_11)和hosts(step_9)必须最先配置，后续步骤才能使用pdsh批量执行
+# 2. SSH免密使用IP连接，不依赖hosts
+# 3. 控制机需要预先安装pdsh
 ALL_STEPS = [
-    # Device check (run first)
+    # Phase 0: 设备检查
     Step0DeviceCheck,
-    # Group A
-    InstallDependencies,
+    NetworkCheckStep,       # step_0b: 网络连通性检查
+    # Phase 1: 初始化配置（SSH免密优先，为后续pdsh批量执行做准备）
+    SSHKeySetup,            # step_11: 配置SSH免密（SSH管理器模式）
+    HostnameHosts,          # step_09: 配置hosts（SSH管理器模式）
+    # --- SSH免密和hosts完成后切换到pdsh模式 ---
+    InstallDependencies,    # step_01: 安装依赖（pdsh模式）
+    # Phase 2: 系统检查
     KernelCheck,
     KernelInstall,
     GlibcCheck,
     OpenSSHCheck,
-    # Group B
+    # Phase 3: 系统基础配置
     SudoNopasswd,
     DiskMount,
     MSRSettings,
     RcLocalSetup,
-    HostnameHosts,
-    # Group C
-    CreateUser,
-    SSHKeySetup,
-    CPUPerformance,
-    FileLimits,
-    # Group D
     DisableAutoUpdate,
     LockKernel,
     TimezoneSetup,
     DisableIPv6,
     VmcoreHibernate,
-    # Group E
+    # Phase 4: 用户和权限配置
+    CreateUser,
+    CPUPerformance,
+    FileLimits,
+    # Phase 5: GPU和网络驱动
     MellanoxDriver,
     DisableNouveau,
     NVIDIADriver,
     FabricManager,
-    # Group F
     CUDAToolkit,
     NCCLInstall,
     RDMARename,
     GPUPersistence,
     NVIDIAModules,
-    # Group G
+    # Phase 6: 高级配置
     DisableACS,
     TimeSync,
     NFSConfig,
+    # Phase 7: 最终验证
+    FinalVerification,
 ]
 
 # 步骤ID到类的映射
@@ -183,6 +203,10 @@ __all__ = [
     'ALL_STEPS', 'STEP_MAP',
     # Device check
     'Step0DeviceCheck',
+    # Network check
+    'NetworkCheckStep',
+    # RDMA network test
+    'NetworkRDMATest',
     # Group A
     'InstallDependencies', 'KernelCheck', 'KernelInstall', 'GlibcCheck', 'OpenSSHCheck',
     # Group B
@@ -197,4 +221,6 @@ __all__ = [
     'CUDAToolkit', 'NCCLInstall', 'RDMARename', 'GPUPersistence', 'NVIDIAModules',
     # Group G
     'DisableACS', 'TimeSync', 'NFSConfig',
+    # Final verification
+    'FinalVerification',
 ]

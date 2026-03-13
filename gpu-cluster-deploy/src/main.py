@@ -216,10 +216,12 @@ class GPUClusterDeploy:
                 self.ssh_manager = SSHManager()
 
             # 初始化批量执行器
+            # 初始使用SSH模式，SSH免密配置完成后切换到pdsh模式
             self.batch_executor = BatchExecutor(
                 ssh_manager=self.ssh_manager,
-                use_pdsh=True,
-                ssh_user="ubuntu"
+                use_pdsh=False,  # 初始使用SSH模式
+                ssh_user="ubuntu",
+                config=self.config  # 传递配置以获取节点认证信息
             )
 
             self.logger.info("SSH初始化成功")
@@ -254,16 +256,23 @@ class GPUClusterDeploy:
             config=self.config,
             ssh_manager=self.ssh_manager,
             batch_executor=self.batch_executor,
-            logger=self.logger
+            logger=self.logger,
+            versions=self.versions
         )
         self.steps[step.step_id] = step
 
     def run_phase(self, phase_id: int, hosts: List[str]) -> bool:
         """运行指定阶段"""
-        # 根据phase_id获取步骤
+        # 根据phase_id获取步骤 - 使用实际的步骤ID
         phase_steps = {
-            1: ["1.1", "1.2", "1.3", "1.4", "1.5"],
-            # ... 其他阶段
+            0: ["00"],  # 设备检查
+            1: ["11", "09", "01"],  # 初始化配置（SSH免密、hosts、依赖）- hosts完成后切换pdsh
+            2: ["02", "02b", "03", "04"],  # 系统检查（内核、glibc、OpenSSH）
+            3: ["05", "06", "07", "08", "15", "16", "17", "18", "19"],  # 系统基础配置
+            4: ["10", "12", "13"],  # 用户和权限配置
+            5: ["20", "21", "22", "23", "24", "25", "26", "27", "28"],  # GPU和网络驱动
+            6: ["29", "30", "34"],  # 高级配置
+            7: ["99"],  # 最终验证
         }
 
         steps = phase_steps.get(phase_id, [])
@@ -282,6 +291,12 @@ class GPUClusterDeploy:
 
             step = self.steps[step_id]
             result = step.run(hosts)
+
+            # SSH免密和hosts都配置完成后，切换到pdsh模式
+            # 注意：当通过跳转服务器访问内网节点时，pdsh 需要在跳转服务器上执行
+            # 当前架构下继续使用 SSH 模式，通过 SSH 代理链执行命令
+            if step_id == "09" and result.success:
+                self.logger.info("SSH免密和hosts配置完成，继续使用SSH模式（通过跳转服务器访问内网节点）...")
 
             if not result.success:
                 success = False
@@ -322,6 +337,14 @@ class GPUClusterDeploy:
         # 获取目标主机
         hosts = self.config.get_all_ips()
 
+        # 注册所有步骤
+        from src.steps import ALL_STEPS
+        for step_class in ALL_STEPS:
+            self.register_step(step_class)
+
+        # 执行部署步骤（不含最终验证）
+        deploy_steps = [sid for sid in self.steps.keys() if sid != "99"]
+
         # 执行部署
         success = True
         if steps:
@@ -339,11 +362,32 @@ class GPUClusterDeploy:
                     success = False
                     break
         else:
-            # 执行完整部署
-            for phase_id in range(1, 4):  # 3个阶段
+            # 执行完整部署（不含最终验证，验证在部署完成后单独执行）
+            for phase_id in range(0, 7):  # 7个阶段 (0-6)
                 if not self.run_phase(phase_id, hosts):
                     success = False
                     break
+
+        # 执行最终验证（部署完成后）
+        if success and "99" in self.steps:
+            self.logger.info("\n" + "=" * 60)
+            self.logger.info("执行最终验证...")
+            self.logger.info("=" * 60)
+
+            # 创建验证步骤实例，传入步骤注册表
+            from src.steps.step_final_verification import FinalVerification
+            verification_step = FinalVerification(
+                config=self.config,
+                ssh_manager=self.ssh_manager,
+                batch_executor=self.batch_executor,
+                logger=self.logger,
+                versions=self.versions,
+                step_registry=self.steps  # 传入所有已注册的步骤
+            )
+            verification_result = verification_step.run(hosts)
+
+            if not verification_result.success:
+                self.logger.warning("最终验证发现问题，请检查报告")
 
         # 生成报告
         self.logger.save_progress_report()

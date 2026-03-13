@@ -1,0 +1,198 @@
+{
+  "task_id": "task-20260301-network-test-module",
+  "task_type": "feature",
+  "execution_mode": 1,
+  "created_at": "2026-03-01T10:00:00",
+  "status": "completed",
+  "completed_at": "2026-03-01T13:15:00",
+  "description": "网络配置重构和独立测试模块开发",
+  "summary": "重构网络配置格式，实现智能IP选择策略，开发独立的网络测试模块，支持RoCE/IB网络检测和三轮测试策略",
+  "steps": [
+    {
+      "step_id": 1,
+      "phase": "Phase 1: 数据模型重构",
+      "name": "重构网络配置数据模型",
+      "description": "修改src/models/cluster.py中的NetworkConfig，增加management/compute/storage网络配置结构",
+      "status": "completed",
+      "completed_at": "2026-03-01T10:30:00",
+      "dependencies": [],
+      "files": ["src/models/cluster.py"],
+      "acceptance_criteria": [
+        "新增NetworkTypeConfig数据类，包含interfaces、rdma_devices、enabled、skip_performance_test等字段",
+        "NetworkConfig包含management、compute、storage三个NetworkTypeConfig字段",
+        "保持向后兼容旧配置格式"
+      ]
+    },
+    {
+      "step_id": 2,
+      "phase": "Phase 1: 数据模型重构",
+      "name": "更新配置加载器",
+      "description": "修改src/config_loader.py，支持新的网络配置格式解析",
+      "status": "completed",
+      "completed_at": "2026-03-01T10:45:00",
+      "dependencies": [1],
+      "files": ["src/config_loader.py"],
+      "acceptance_criteria": [
+        "正确解析新的网络配置格式",
+        "向后兼容旧的nics配置格式",
+        "验证配置有效性"
+      ]
+    },
+    {
+      "step_id": 3,
+      "phase": "Phase 1: 数据模型重构",
+      "name": "创建配置文件示例",
+      "description": "更新config/cluster.yaml示例文件，展示新的网络配置格式",
+      "status": "completed",
+      "completed_at": "2026-03-01T11:00:00",
+      "dependencies": [2],
+      "files": ["config/cluster.yaml", "config/cluster_batch_example.yaml"],
+      "acceptance_criteria": [
+        "新配置格式完整示例",
+        "包含所有三种网络类型配置",
+        "包含ib_write_bw测试参数配置"
+      ]
+    },
+    {
+      "step_id": 4,
+      "phase": "Phase 2: IP智能选择",
+      "name": "实现IP获取工具类",
+      "description": "创建src/network/ip_resolver.py，实现根据网卡名称获取IP的功能",
+      "status": "completed",
+      "completed_at": "2026-03-01T11:15:00",
+      "dependencies": [1],
+      "files": ["src/network/ip_resolver.py"],
+      "acceptance_criteria": [
+        "get_interface_ip函数：根据网卡名获取IP地址",
+        "get_network_ip函数：根据网络类型获取对应IP",
+        "支持远程主机执行获取IP"
+      ]
+    },
+    {
+      "step_id": 5,
+      "phase": "Phase 2: IP智能选择",
+      "name": "修改NFS配置步骤",
+      "description": "修改step_34_nfs_config.py，实现智能IP选择策略",
+      "status": "completed",
+      "completed_at": "2026-03-01T11:30:00",
+      "dependencies": [4],
+      "files": ["src/steps/step_34_nfs_config.py"],
+      "acceptance_criteria": [
+        "优先使用存储网IP配置NFS",
+        "没有存储网时使用管理网IP",
+        "软件包传输使用管理网IP",
+        "日志记录使用的网络类型"
+      ]
+    },
+    {
+      "step_id": 6,
+      "phase": "Phase 3: 网络测试模块",
+      "name": "创建RDMA设备类型检测器",
+      "description": "创建src/network/rdma_detector.py，实现RoCE/InfiniBand设备类型自动检测",
+      "status": "completed",
+      "completed_at": "2026-03-01T11:45:00",
+      "dependencies": [1],
+      "files": ["src/network/rdma_detector.py"],
+      "acceptance_criteria": [
+        "自动检测设备类型(RoCE/RoCEv2/InfiniBand)",
+        "支持多种检测方法(ibv_devinfo, rdma link)",
+        "返回设备详细信息和状态"
+      ]
+    },
+    {
+      "step_id": 7,
+      "phase": "Phase 3: 网络测试模块",
+      "name": "创建ib_write_bw测试器",
+      "description": "创建src/network/ibandwidth_tester.py，封装ib_write_bw性能测试",
+      "status": "completed",
+      "completed_at": "2026-03-01T12:00:00",
+      "dependencies": [6],
+      "files": ["src/network/ibandwidth_tester.py"],
+      "acceptance_criteria": [
+        "支持RoCE和InfiniBand两种模式",
+        "自动计算端口号避免冲突",
+        "解析带宽结果并计算百分比",
+        "支持并发测试"
+      ]
+    },
+    {
+      "step_id": 8,
+      "phase": "Phase 3: 网络测试模块",
+      "name": "创建三轮测试策略模块",
+      "description": "创建src/network/three_phase_tester.py，实现三轮测试定位异常",
+      "status": "completed",
+      "completed_at": "2026-03-01T12:15:00",
+      "dependencies": [7],
+      "files": ["src/network/three_phase_tester.py"],
+      "acceptance_criteria": [
+        "第一轮：相邻配对(1,2),(3,4)...",
+        "第二轮：错位配对(2,3),(4,5)...",
+        "第三轮：用正常主机定位异常网卡",
+        "支持并发执行",
+        "生成完整测试报告"
+      ]
+    },
+    {
+      "step_id": 9,
+      "phase": "Phase 3: 网络测试模块",
+      "name": "创建部署验证检查器",
+      "description": "创建src/network/deployment_verifier.py，检查所有部署步骤是否完成",
+      "status": "completed",
+      "completed_at": "2026-03-01T12:30:00",
+      "dependencies": [],
+      "files": ["src/network/deployment_verifier.py"],
+      "acceptance_criteria": [
+        "检查所有关键部署步骤配置状态",
+        "生成部署完成度报告",
+        "列出未完成的配置项"
+      ]
+    },
+    {
+      "step_id": 10,
+      "phase": "Phase 3: 网络测试模块",
+      "name": "创建网络测试步骤",
+      "description": "创建src/steps/step_0c_network_rdma_test.py，作为独立测试步骤",
+      "status": "completed",
+      "completed_at": "2026-03-01T12:45:00",
+      "dependencies": [8, 9],
+      "files": ["src/steps/step_0c_network_rdma_test.py"],
+      "acceptance_criteria": [
+        "继承BaseStep，可独立执行",
+        "支持跳过部署直接测试模式",
+        "生成详细的测试报告",
+        "可选生成HTML报告"
+      ]
+    },
+    {
+      "step_id": 11,
+      "phase": "Phase 4: CLI集成",
+      "name": "创建独立测试CLI入口",
+      "description": "创建独立的网络测试CLI，支持--test-only模式",
+      "status": "completed",
+      "completed_at": "2026-03-01T13:00:00",
+      "dependencies": [10],
+      "files": ["src/cli/network_test_cli.py", "src/main.py"],
+      "acceptance_criteria": [
+        "支持--network-test参数",
+        "支持指定测试的网络类型",
+        "支持指定测试轮次",
+        "支持输出格式选择(text/json/html)"
+      ]
+    },
+    {
+      "step_id": 12,
+      "phase": "Phase 5: 测试和文档",
+      "name": "编写单元测试",
+      "description": "为新模块编写单元测试",
+      "status": "completed",
+      "completed_at": "2026-03-01T13:15:00",
+      "dependencies": [1, 4, 6, 7, 8],
+      "files": ["tests/test_network_modules.py"],
+      "acceptance_criteria": [
+        "测试覆盖率>80%",
+        "所有测试通过",
+        "包含边界条件测试"
+      ]
+    }
+  ]
+}

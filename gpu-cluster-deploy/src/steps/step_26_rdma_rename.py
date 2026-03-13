@@ -25,7 +25,7 @@ class RDMARename(BaseStep):
     supports_batch = False
 
     def __init__(self, config=None, ssh_manager=None, batch_executor=None, logger=None,
-                 rename_config: Optional[Dict[str, Any]] = None):
+                 rename_config: Optional[Dict[str, Any]] = None, versions=None):
         """初始化步骤
 
         Args:
@@ -35,8 +35,9 @@ class RDMARename(BaseStep):
                 - skip_if_exists: 如果目标名称已存在则跳过 (默认True)
                 - dry_run: 预览模式 (默认False)
                 - mappings: 自定义映射规则列表
+            versions: 版本配置
         """
-        super().__init__(config, ssh_manager, batch_executor, logger)
+        super().__init__(config, ssh_manager, batch_executor, logger, versions)
         self.rename_config = rename_config or {}
 
     @property

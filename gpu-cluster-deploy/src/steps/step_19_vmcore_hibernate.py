@@ -15,6 +15,34 @@ class VmcoreHibernate(BaseStep):
     requires_sudo = True
     supports_batch = True
 
+    def is_configured(self, host: str) -> tuple:
+        """
+        检查vmcore配置和休眠禁止是否已配置
+
+        Args:
+            host: 主机地址
+
+        Returns:
+            tuple[bool, str]: (是否已配置, 检查详情)
+        """
+        # 1. 检查休眠目标是否已屏蔽
+        check_sleep_cmd = "systemctl is-enabled sleep.target 2>/dev/null || echo 'masked'"
+        sleep_result = self.execute_on_host(host, check_sleep_cmd, sudo=False)
+
+        if sleep_result.get("success"):
+            status = sleep_result.get("stdout", "").strip().lower()
+            if status not in ["masked", "disabled", "not-found"]:
+                return False, f"休眠目标未屏蔽（状态: {status}）"
+
+        # 2. 检查sysctl配置是否存在
+        check_sysctl_cmd = "grep -q 'hung_task_panic' /etc/sysctl.conf"
+        sysctl_result = self.execute_on_host(host, check_sysctl_cmd, sudo=False)
+
+        if not sysctl_result.get("success"):
+            return False, "vmcore sysctl配置不存在"
+
+        return True, "vmcore配置和休眠禁止已完成"
+
     def execute(self, hosts: List[str]) -> StepResult:
         """执行vmcore和休眠配置"""
         # 1. 配置vmcore触发

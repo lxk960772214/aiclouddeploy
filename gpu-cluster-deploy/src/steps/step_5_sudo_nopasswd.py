@@ -16,6 +16,30 @@ class SudoNopasswd(BaseStep):
     supports_batch = True
     can_skip = True  # root账户可跳过
 
+    def is_configured(self, host: str) -> tuple:
+        """
+        检查sudo免密是否已配置
+
+        Args:
+            host: 主机地址
+
+        Returns:
+            tuple[bool, str]: (是否已配置, 检查详情)
+        """
+        # 检查当前用户是否为root
+        whoami_result = self.execute_on_host(host, "whoami", sudo=False)
+        if whoami_result.get("success") and whoami_result.get("stdout", "").strip() == "root":
+            return True, "root账户无需配置sudo免密"
+
+        # 使用 sudo -n 测试是否需要密码
+        # -n 参数：非交互模式，需要密码时直接失败而不提示
+        cmd = "sudo -n true 2>/dev/null && echo 'ok' || echo 'need_password'"
+        result = self.execute_on_host(host, cmd, sudo=False)
+
+        if result.get("success") and "ok" in result.get("stdout", ""):
+            return True, "sudo免密已配置"
+        return False, "sudo免密未配置"
+
     def execute(self, hosts: List[str]) -> StepResult:
         """执行sudo免密设置"""
         # 检查当前用户

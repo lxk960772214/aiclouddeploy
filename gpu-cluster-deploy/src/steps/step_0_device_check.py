@@ -29,16 +29,19 @@ class Step0DeviceCheck(BaseStep):
     supports_batch = False
     timeout = 300
 
-    def __init__(self, config, ssh_manager, device_check_config: Optional[DeviceCheckConfig] = None):
+    def __init__(self, config, ssh_manager, batch_executor=None, logger=None, device_check_config: Optional[DeviceCheckConfig] = None, versions=None):
         """
         初始化设备检查步骤
 
         Args:
             config: 集群配置
             ssh_manager: SSH管理器
+            batch_executor: 批量执行器
+            logger: 日志记录器
             device_check_config: 设备检查配置
+            versions: 版本配置
         """
-        super().__init__(config, ssh_manager)
+        super().__init__(config, ssh_manager, batch_executor, logger, versions)
         self.device_check_config = device_check_config or DeviceCheckConfig()
 
     def execute(self, hosts: List[str]) -> StepResult:

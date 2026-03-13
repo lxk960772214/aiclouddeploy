@@ -15,6 +15,34 @@ class DisableAutoUpdate(BaseStep):
     requires_sudo = True
     supports_batch = True
 
+    def is_configured(self, host: str) -> tuple:
+        """
+        检查系统自动更新是否已禁用
+
+        Args:
+            host: 主机地址
+
+        Returns:
+            tuple[bool, str]: (是否已配置, 检查详情)
+        """
+        # 1. 检查 unattended-upgrades 服务是否已禁用
+        check_service_cmd = "systemctl is-enabled unattended-upgrades.service 2>/dev/null || echo 'disabled'"
+        service_result = self.execute_on_host(host, check_service_cmd, sudo=False)
+
+        if service_result.get("success"):
+            status = service_result.get("stdout", "").strip().lower()
+            if status not in ["disabled", "masked", "not-found"]:
+                return False, f"unattended-upgrades服务未禁用（状态: {status}）"
+
+        # 2. 检查内核锁定配置是否存在
+        check_prefs_cmd = "test -f /etc/apt/preferences.d/nolinuxupgrades"
+        prefs_result = self.execute_on_host(host, check_prefs_cmd, sudo=False)
+
+        if not prefs_result.get("success"):
+            return False, "内核锁定配置文件不存在"
+
+        return True, "系统自动更新已禁用"
+
     def execute(self, hosts: List[str]) -> StepResult:
         """执行禁止自动更新"""
         # 1. 删除unattended-upgrades配置

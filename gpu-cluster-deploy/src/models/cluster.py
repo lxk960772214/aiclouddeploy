@@ -90,6 +90,9 @@ class NodeConfig:
     ip: str
     roles: List[str] = field(default_factory=list)
     storage: Optional[StorageConfig] = None
+    username: Optional[str] = None  # SSH用户名
+    password: Optional[str] = None  # SSH密码
+    private_key: Optional[str] = None  # SSH私钥路径
 
     @property
     def is_nfs_server(self) -> bool:
@@ -132,18 +135,171 @@ class NFSConfig:
 
 
 @dataclass
-class NetworkConfig:
-    """网络配置"""
-    compute_nics: List[str] = field(default_factory=list)
-    storage_nics: List[str] = field(default_factory=list)
-    management_nics: List[str] = field(default_factory=list)
+class TimeSyncConfig:
+    """时间同步配置"""
+    server: Optional[str] = None
+    timezone: str = "Asia/Shanghai"
 
     def to_dict(self) -> Dict:
         return {
+            "server": self.server,
+            "timezone": self.timezone
+        }
+
+
+@dataclass
+class NICConfig:
+    """网卡配置"""
+    pattern: str
+    count: int
+    net_prefix: str
+
+
+@dataclass
+class NetworkTypeConfig:
+    """单个网络类型配置"""
+    description: str = ""
+    interfaces: List[str] = field(default_factory=list)
+    rdma_devices: List[str] = field(default_factory=list)
+    enabled: bool = True
+    skip_performance_test: bool = False
+    skip_inter_host_test: bool = False
+    theoretical_bandwidth_gbps: float = 100.0
+
+    def to_dict(self) -> Dict:
+        return {
+            "description": self.description,
+            "interfaces": self.interfaces,
+            "rdma_devices": self.rdma_devices,
+            "enabled": self.enabled,
+            "skip_performance_test": self.skip_performance_test,
+            "skip_inter_host_test": self.skip_inter_host_test,
+            "theoretical_bandwidth_gbps": self.theoretical_bandwidth_gbps
+        }
+
+
+@dataclass
+class IBWriteBWConfig:
+    """ib_write_bw测试参数"""
+    duration: int = 10
+    size: int = 65536
+    port_base: int = 18500
+    min_bandwidth_percent: float = 90.0
+
+    def to_dict(self) -> Dict:
+        return {
+            "duration": self.duration,
+            "size": self.size,
+            "port_base": self.port_base,
+            "min_bandwidth_percent": self.min_bandwidth_percent
+        }
+
+
+@dataclass
+class NICMappingConfig:
+    """网卡映射配置（简化版）"""
+    source_pattern: str  # 源名称模式
+    target_name: str  # 目标名称模板
+    nic_type: str = "unknown"  # rdma | ethernet | unknown
+    enabled: bool = True
+
+
+@dataclass
+class NICRenameConfig:
+    """网卡重命名配置"""
+    enabled: bool = False
+    mappings: List[NICMappingConfig] = field(default_factory=list)
+    create_udev_rules: bool = True
+    backup_original: bool = True
+    skip_if_exists: bool = True
+    dry_run: bool = False
+
+
+@dataclass
+class NetworkConfig:
+    """网络配置
+
+    支持两种配置格式:
+    1. 新格式: management/compute/storage 独立配置
+    2. 旧格式: compute_nics/storage_nics/management_nics 列表 + nics pattern配置
+    """
+    # 新格式 - 独立网络类型配置
+    management: Optional[NetworkTypeConfig] = None
+    compute: Optional[NetworkTypeConfig] = None
+    storage: Optional[NetworkTypeConfig] = None
+    ib_write_bw: Optional[IBWriteBWConfig] = None
+
+    # 旧格式 - 保留向后兼容
+    compute_nics: List[str] = field(default_factory=list)
+    storage_nics: List[str] = field(default_factory=list)
+    management_nics: List[str] = field(default_factory=list)
+    nics: Dict[str, NICConfig] = field(default_factory=dict)
+    nic_rename: Optional[NICRenameConfig] = None  # 网卡重命名配置
+
+    def get_enabled_networks(self) -> Dict[str, NetworkTypeConfig]:
+        """获取所有启用的网络配置"""
+        result = {}
+        if self.management and self.management.enabled:
+            result['management'] = self.management
+        if self.compute and self.compute.enabled:
+            result['compute'] = self.compute
+        if self.storage and self.storage.enabled:
+            result['storage'] = self.storage
+        return result
+
+    def get_network_interfaces(self, network_type: str) -> List[str]:
+        """获取指定网络类型的接口列表"""
+        network = getattr(self, network_type, None)
+        if network and isinstance(network, NetworkTypeConfig):
+            return network.interfaces
+        # 回退到旧格式
+        if network_type == 'management':
+            return self.management_nics
+        elif network_type == 'compute':
+            return self.compute_nics
+        elif network_type == 'storage':
+            return self.storage_nics
+        return []
+
+    def get_network_rdma_devices(self, network_type: str) -> List[str]:
+        """获取指定网络类型的RDMA设备列表"""
+        network = getattr(self, network_type, None)
+        if network and isinstance(network, NetworkTypeConfig):
+            return network.rdma_devices
+        return []
+
+    def has_network_config(self, network_type: str) -> bool:
+        """检查是否配置了指定网络类型"""
+        network = getattr(self, network_type, None)
+        if network and isinstance(network, NetworkTypeConfig) and network.enabled:
+            return bool(network.interfaces or network.rdma_devices)
+        # 检查旧格式
+        if network_type == 'management':
+            return bool(self.management_nics)
+        elif network_type == 'compute':
+            return bool(self.compute_nics)
+        elif network_type == 'storage':
+            return bool(self.storage_nics)
+        return False
+
+    def to_dict(self) -> Dict:
+        result = {
+            # 新格式
+            "management": self.management.to_dict() if self.management else None,
+            "compute": self.compute.to_dict() if self.compute else None,
+            "storage": self.storage.to_dict() if self.storage else None,
+            "ib_write_bw": self.ib_write_bw.to_dict() if self.ib_write_bw else None,
+            # 旧格式
             "compute_nics": self.compute_nics,
             "storage_nics": self.storage_nics,
-            "management_nics": self.management_nics
+            "management_nics": self.management_nics,
+            "nics": {k: {"pattern": v.pattern, "count": v.count, "net_prefix": v.net_prefix} for k, v in self.nics.items()},
+            "nic_rename": {
+                "enabled": self.nic_rename.enabled,
+                "mappings": [{"source_pattern": m.source_pattern, "target_name": m.target_name, "nic_type": m.nic_type, "enabled": m.enabled} for m in self.nic_rename.mappings]
+            } if self.nic_rename else None
         }
+        return result
 
 
 @dataclass
@@ -184,6 +340,7 @@ class ClusterConfig:
     nodes: List[NodeConfig] = field(default_factory=list)
     node_batch: NodeBatchConfig = field(default_factory=NodeBatchConfig)  # 批量节点配置
     nfs: NFSConfig = field(default_factory=NFSConfig)
+    time_sync: TimeSyncConfig = field(default_factory=TimeSyncConfig)
     network: NetworkConfig = field(default_factory=NetworkConfig)
 
     @property
@@ -239,6 +396,7 @@ class ClusterConfig:
             "nodes": [node.to_dict() for node in self.nodes],
             "node_batch": self.node_batch.to_dict(),
             "nfs": self.nfs.to_dict(),
+            "time_sync": self.time_sync.to_dict(),
             "network": self.network.to_dict(),
             "node_count": self.node_count
         }

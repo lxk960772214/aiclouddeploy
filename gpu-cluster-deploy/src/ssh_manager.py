@@ -72,6 +72,7 @@ class SSHConnection:
         self.jump_client = jump_client
         self.client: Optional[paramiko.SSHClient] = None
         self._connected = False
+        self._is_root: Optional[bool] = None  # 缓存 root 用户状态
 
     def connect(self, timeout: int = 30) -> bool:
         """建立SSH连接"""
@@ -155,6 +156,7 @@ class SSHConnection:
             self.client.close()
             self.client = None
         self._connected = False
+        self._is_root = None  # 重置 root 用户缓存
         logger.debug(f"SSH连接已断开: {self.host}")
 
     def is_connected(self) -> bool:
@@ -163,6 +165,31 @@ class SSHConnection:
             return False
         transport = self.client.get_transport()
         return transport is not None and transport.is_active()
+
+    def _check_is_root(self) -> bool:
+        """
+        检查当前SSH用户是否为root
+
+        Returns:
+            bool: 是否为root用户
+        """
+        if self._is_root is not None:
+            return self._is_root
+
+        try:
+            # 使用 id -u 命令检查，root 用户返回 0
+            stdin, stdout, stderr = self.client.exec_command("id -u", timeout=5)
+            exit_code = stdout.channel.recv_exit_status()
+            stdout_str = stdout.read().decode('utf-8').strip()
+
+            self._is_root = (exit_code == 0 and stdout_str == "0")
+            if self._is_root:
+                logger.debug(f"[{self.host}] 检测到 root 用户，将跳过 sudo 包装")
+            return self._is_root
+        except Exception as e:
+            logger.warning(f"[{self.host}] 检测用户类型失败: {e}，假设非 root 用户")
+            self._is_root = False
+            return False
 
     def execute(self, command: str, timeout: int = 300,
                 sudo: bool = False, sudo_password: Optional[str] = None) -> SSHResult:
@@ -180,10 +207,20 @@ class SSHConnection:
         start_time = time.time()
 
         try:
-            if sudo and sudo_password:
-                # 使用 sh -c 包装命令，确保 && 连接的命令都在 sudo 下执行
-                # 例如: sudo apt-get update && apt-get install -> sudo sh -c "apt-get update && apt-get install"
-                command = f"echo '{sudo_password}' | sudo -S sh -c '{command}'"
+            # 检查是否需要 sudo 包装
+            actual_sudo_needed = sudo and sudo_password
+
+            # 如果需要 sudo，先检测用户是否为 root
+            if actual_sudo_needed and self._check_is_root():
+                # root 用户不需要 sudo 包装
+                actual_sudo_needed = False
+                logger.debug(f"[{self.host}] root 用户跳过 sudo 包装")
+
+            if actual_sudo_needed:
+                # 使用双引号包装命令，避免单引号嵌套问题
+                # 转义命令中的双引号和特殊字符
+                escaped_command = command.replace('\\', '\\\\').replace('"', '\\"').replace('$', '\\$')
+                command = f"echo '{sudo_password}' | sudo -S sh -c \"{escaped_command}\""
 
             stdin, stdout, stderr = self.client.exec_command(command, timeout=timeout)
 

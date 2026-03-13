@@ -15,6 +15,32 @@ class CreateUser(BaseStep):
     requires_sudo = True
     supports_batch = True
 
+    def is_configured(self, host: str) -> tuple:
+        """
+        检查ubuntu用户是否已创建并配置sudo免密
+
+        Args:
+            host: 主机地址
+
+        Returns:
+            tuple[bool, str]: (是否已配置, 检查详情)
+        """
+        # 检查ubuntu用户是否存在
+        check_user_cmd = "id ubuntu 2>/dev/null && echo 'exists' || echo 'not_exists'"
+        user_result = self.execute_on_host(host, check_user_cmd, sudo=False)
+
+        if not user_result.get("success") or "not_exists" in user_result.get("stdout", ""):
+            return False, "ubuntu用户不存在"
+
+        # 检查sudo免密是否已配置
+        check_sudo_cmd = "sudo -u ubuntu sudo -n true 2>/dev/null && echo 'ok' || echo 'need_password'"
+        sudo_result = self.execute_on_host(host, check_sudo_cmd, sudo=False)
+
+        if sudo_result.get("success") and "ok" in sudo_result.get("stdout", ""):
+            return True, "ubuntu用户已创建且sudo免密已配置"
+
+        return False, "ubuntu用户已存在但sudo免密未配置"
+
     def execute(self, hosts: List[str]) -> StepResult:
         """执行用户创建"""
         results = {}

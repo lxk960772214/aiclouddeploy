@@ -15,6 +15,36 @@ class TimezoneSetup(BaseStep):
     requires_sudo = True
     supports_batch = True
 
+    def is_configured(self, host: str) -> tuple:
+        """
+        检查时区是否已配置
+
+        Args:
+            host: 主机地址
+
+        Returns:
+            tuple[bool, str]: (是否已配置, 检查详情)
+        """
+        # 获取目标时区
+        target_timezone = "Asia/Shanghai"
+        if self.config and hasattr(self.config, 'time_sync'):
+            time_sync = self.config.time_sync
+            if hasattr(time_sync, 'timezone'):
+                target_timezone = time_sync.timezone
+
+        # 检查当前时区
+        check_cmd = f"timedatectl show --no-pager | grep -o 'Timezone=' | head -1"
+        result = self.execute_on_host(host, check_cmd, sudo=False)
+
+        if result.get("success"):
+            current_tz = result.get("stdout", "").strip()
+            if current_tz == target_timezone:
+                return True, f"时区已配置为 {target_timezone}"
+            else:
+                return False, f"时区不匹配: 当前={current_tz}, 目标={target_timezone}"
+
+        return False, "时区未配置"
+
     def execute(self, hosts: List[str]) -> StepResult:
         """执行时区设置"""
         # 1. 设置时区

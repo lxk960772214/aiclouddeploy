@@ -1,0 +1,114 @@
+{
+  "task_id": "task-20260225-152000",
+  "title": "增强配置文件夹路径指定功能",
+  "type": "feature",
+  "status": "pending",
+  "mode": 1,
+  "created_at": "2026-02-25T15:20:00Z",
+  "updated_at": "2026-02-25T15:20:00Z",
+  "steps": [
+    {
+      "step_id": 1,
+      "name": "需求分析和现状评估",
+      "description": "分析当前config路径功能的实现状态，确定需要增强的具体内容",
+      "status": "pending",
+      "attempts": 0,
+      "max_attempts": 3,
+      "details": {
+        "current_implementation": [
+          "--config-dir/-c 参数已存在于 main.py 和 cli/main.py",
+          "ConfigLoader 接受 config_dir 参数",
+          "参数已正确传递到执行控制器"
+        ],
+        "enhancement_areas": [
+          "环境变量支持 (GPU_DEPLOY_CONFIG_DIR)",
+          "相对路径规范化处理",
+          "配置目录验证 (必需文件检查)",
+          "计划文件路径解析增强",
+          "hosts_file 路径处理"
+        ]
+      }
+    },
+    {
+      "step_id": 2,
+      "name": "编写测试用例",
+      "description": "为配置路径功能编写单元测试，遵循TDD方法",
+      "status": "pending",
+      "attempts": 0,
+      "max_attempts": 3,
+      "depends_on": [1]
+    },
+    {
+      "step_id": 3,
+      "name": "实现环境变量支持",
+      "description": "添加 GPU_DEPLOY_CONFIG_DIR 环境变量作为备选配置路径",
+      "status": "pending",
+      "attempts": 0,
+      "max_attempts": 3,
+      "depends_on": [2],
+      "details": {
+        "priority_order": [
+          "1. 命令行 --config-dir 参数",
+          "2. 环境变量 GPU_DEPLOY_CONFIG_DIR",
+          "3. 默认值 'config'"
+        ]
+      }
+    },
+    {
+      "step_id": 4,
+      "name": "增强路径处理",
+      "description": "改进相对路径和绝对路径的处理逻辑",
+      "status": "pending",
+      "attempts": 0,
+      "max_attempts": 3,
+      "depends_on": [3],
+      "details": {
+        "features": [
+          "相对路径转换为绝对路径",
+          "路径存在性验证",
+          "~扩展支持",
+          "路径规范化"
+        ]
+      }
+    },
+    {
+      "step_id": 5,
+      "name": "添加配置目录验证",
+      "description": "验证配置目录包含必需的配置文件",
+      "status": "pending",
+      "attempts": 0,
+      "max_attempts": 3,
+      "depends_on": [4],
+      "details": {
+        "required_files": ["cluster.yaml", "versions.yaml"],
+        "optional_files": ["plans/*.yaml"]
+      }
+    },
+    {
+      "step_id": 6,
+      "name": "更新CLI帮助文档",
+      "description": "更新帮助信息和示例，说明配置路径的各种指定方式",
+      "status": "pending",
+      "attempts": 0,
+      "max_attempts": 3,
+      "depends_on": [5]
+    },
+    {
+      "step_id": 7,
+      "name": "运行测试并验证",
+      "description": "执行所有测试，确保功能正常工作",
+      "status": "pending",
+      "attempts": 0,
+      "max_attempts": 3,
+      "depends_on": [6]
+    }
+  ],
+  "metadata": {
+    "affected_files": [
+      "gpu-cluster-deploy/src/config_loader.py",
+      "gpu-cluster-deploy/src/cli/main.py",
+      "gpu-cluster-deploy/src/main.py",
+      "gpu-cluster-deploy/tests/test_config_loader.py"
+    ]
+  }
+}

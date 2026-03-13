@@ -15,36 +15,75 @@ class DisableNouveau(BaseStep):
     requires_sudo = True
     supports_batch = True
     requires_reboot = True
+    can_skip = True  # 可以跳过
+
+    def is_configured(self, host: str) -> tuple:
+        """
+        检查nouveau驱动是否已禁用
+
+        Args:
+            host: 主机地址
+
+        Returns:
+            tuple[bool, str]: (是否已配置, 检查详情)
+        """
+        # 1. 检查黑名单配置是否存在
+        check_blacklist_cmd = "grep -q 'blacklist nouveau' /etc/modprobe.d/blacklist.conf 2>/dev/null"
+        blacklist_result = self.execute_on_host(host, check_blacklist_cmd, sudo=False)
+
+        if not blacklist_result.get("success"):
+            return False, "nouveau黑名单配置不存在"
+
+        # 2. 检查内核模块是否已加载（重启后生效）
+        check_module_cmd = "lsmod | grep -q nouveau && echo 'loaded' || echo 'not_loaded'"
+        module_result = self.execute_on_host(host, check_module_cmd, sudo=False)
+
+        if module_result.get("success"):
+            status = module_result.get("stdout", "").strip()
+            if "loaded" in status:
+                # 模块已加载，说明重启后还没生效或配置有问题
+                return False, "nouveau模块仍在加载中（可能需要重启）"
+
+        return True, "nouveau驱动已禁用"
 
     def execute(self, hosts: List[str]) -> StepResult:
         """执行禁用nouveau驱动"""
-        # 1. 添加黑名单
-        blacklist_content = '''blacklist nouveau
-blacklist lbm-nouveau
-options nouveau modeset=0
-alias nouveau off
-alias lbm-nouveau off'''
+        # 1. 检查是否已禁用
+        check_cmd = "grep -q 'blacklist nouveau' /etc/modprobe.d/blacklist.conf 2>/dev/null && echo disabled || echo not_disabled"
+        check_result = self.execute_batch(hosts, check_cmd, sudo=False)
 
-        blacklist_cmd = f'''cat >> /etc/modprobe.d/blacklist.conf << 'EOF'
-{blacklist_content}
-EOF'''
-        blacklist_result = self.execute_batch(hosts, blacklist_cmd, sudo=True)
+        already_disabled = [h for h, r in check_result.results.items()
+                           if r.success and 'disabled' in r.stdout]
 
-        failed = [h for h, r in blacklist_result.results.items() if not r.success]
-        if failed:
+        if len(already_disabled) == len(hosts):
             return StepResult(
                 step_id=self.step_id,
                 step_name=self.step_name,
-                status=StepStatus.FAILED,
-                message=f"添加黑名单失败: {failed}",
-                host_results=blacklist_result.results
+                status=StepStatus.SUCCESS,
+                message="nouveau驱动已禁用（无需重复操作）",
+                host_results={h: {"success": True, "already_disabled": True} for h in hosts}
             )
 
-        # 2. 更新initramfs
-        initramfs_cmd = "update-initramfs -k $(uname -r) -c"
-        initramfs_result = self.execute_batch(hosts, initramfs_cmd, sudo=True)
+        # 2. 添加黑名单（逐行追加）
+        blacklist_lines = [
+            "blacklist nouveau",
+            "blacklist lbm-nouveau",
+            "options nouveau modeset=0",
+            "alias nouveau off",
+            "alias lbm-nouveau off"
+        ]
 
-        # 3. 验证配置
+        for host in hosts:
+            if host in already_disabled:
+                continue
+            for line in blacklist_lines:
+                self.execute_on_host(host, f"echo '{line}' | sudo tee -a /etc/modprobe.d/blacklist.conf", sudo=True)
+
+        # 3. 更新initramfs
+        initramfs_cmd = "update-initramfs -k $(uname -r) -c"
+        self.execute_batch(hosts, initramfs_cmd, sudo=True)
+
+        # 4. 验证配置
         verify_cmd = "grep -q 'blacklist nouveau' /etc/modprobe.d/blacklist.conf"
         verify_result = self.execute_batch(hosts, verify_cmd, sudo=False)
 
@@ -53,7 +92,8 @@ EOF'''
             step_name=self.step_name,
             status=StepStatus.SUCCESS,
             message="nouveau驱动已禁用（需要重启生效）",
-            host_results=verify_result.results
+            host_results={h: {"success": r.success, "stdout": r.stdout}
+                         for h, r in verify_result.results.items()}
         )
 
     def post_check(self, hosts: List[str]) -> bool:

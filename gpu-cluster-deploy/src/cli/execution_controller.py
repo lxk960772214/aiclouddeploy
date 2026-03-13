@@ -212,7 +212,7 @@ class ExecutionController:
             from ..batch_executor import BatchExecutor
             self._batch_executor = BatchExecutor(
                 ssh_manager=self._ssh_manager,
-                use_pdsh=True,
+                use_pdsh=False,  # 初始使用SSH模式，不依赖免密
                 ssh_user="ubuntu"
             )
 

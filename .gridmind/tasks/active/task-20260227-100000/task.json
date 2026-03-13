@@ -1,0 +1,239 @@
+{
+  "task_id": "task-20260227-100000",
+  "title": "GPU集群部署程序远程测试",
+  "type": "remote-test",
+  "status": "completed",
+  "mode": 1,
+  "created_at": "2026-02-27T10:00:00Z",
+  "updated_at": "2026-02-27T10:00:00Z",
+  "environment": {
+    "jumphost": {
+      "host": "36.103.234.31",
+      "port": 22,
+      "username": "ubuntu",
+      "password": "BDZ2.7YbtEwJfDRi"
+    },
+    "target_servers": [
+      {
+        "hostname": "gpu-node-01",
+        "ip": "10.0.18.87",
+        "username": "ubuntu",
+        "password": "BDZ2.7YbtEwJfDRi"
+      },
+      {
+        "hostname": "gpu-node-02",
+        "ip": "10.0.19.134",
+        "username": "ubuntu",
+        "password": "6zMuBY5hs.mTKeBn"
+      }
+    ],
+    "config_dir": "/mnt/e/openclaw-workspace/deploy/config/test-cluster/",
+    "log_dir": "/mnt/e/openclaw-workspace/deploy/logs/test-cluster/",
+    "packages_dir": "/mnt/e/openclaw-workspace/deploy/packages/"
+  },
+  "steps": [
+    {
+      "step_id": 1,
+      "phase": "Phase 1: 环境准备",
+      "name": "创建测试配置目录和文件",
+      "description": "创建配置文件目录结构，生成测试用的 cluster.yaml 和 versions.yaml",
+      "status": "pending",
+      "action": "create_config_files",
+      "target_file": "/mnt/e/openclaw-workspace/deploy/config/test-cluster/",
+      "risk_level": "low",
+      "auto_approve": true,
+      "depends_on": []
+    },
+    {
+      "step_id": 2,
+      "phase": "Phase 1: 环境准备",
+      "name": "测试跳板机SSH连接",
+      "description": "使用密码认证连接跳板机，验证连接参数正确性",
+      "status": "pending",
+      "action": "test_ssh_connection",
+      "target": "jumphost",
+      "command": "echo 'Jumphost connection test successful' && hostname",
+      "risk_level": "low",
+      "auto_approve": true,
+      "depends_on": [1]
+    },
+    {
+      "step_id": 3,
+      "phase": "Phase 1: 环境准备",
+      "name": "测试目标服务器1 SSH连接",
+      "description": "通过跳板机连接目标服务器1 (10.0.18.87)",
+      "status": "pending",
+      "action": "test_ssh_connection",
+      "target": "10.0.18.87",
+      "command": "echo 'Target server 1 connection test successful' && hostname && ip addr show",
+      "risk_level": "low",
+      "auto_approve": true,
+      "depends_on": [2]
+    },
+    {
+      "step_id": 4,
+      "phase": "Phase 1: 环境准备",
+      "name": "测试目标服务器2 SSH连接",
+      "description": "通过跳板机连接目标服务器2 (10.0.19.134)",
+      "status": "pending",
+      "action": "test_ssh_connection",
+      "target": "10.0.19.134",
+      "command": "echo 'Target server 2 connection test successful' && hostname && ip addr show",
+      "risk_level": "low",
+      "auto_approve": true,
+      "depends_on": [2]
+    },
+    {
+      "step_id": 5,
+      "phase": "Phase 2: 配置加载测试",
+      "name": "测试配置加载器功能",
+      "description": "运行 ConfigLoader 加载测试配置，验证配置解析正确",
+      "status": "pending",
+      "action": "run_test",
+      "command": "cd /mnt/e/github/aiclouddeploy/gpu-cluster-deploy && python -c \"from src.config_loader import ConfigLoader; loader = ConfigLoader('/mnt/e/openclaw-workspace/deploy/config/test-cluster/'); config = loader.load_cluster_config(); print(f'Cluster: {config.name}, Nodes: {config.node_count}')\"",
+      "risk_level": "low",
+      "auto_approve": true,
+      "depends_on": [3, 4]
+    },
+    {
+      "step_id": 6,
+      "phase": "Phase 2: 配置加载测试",
+      "name": "验证配置有效性",
+      "description": "运行配置验证，检查节点配置、跳板机配置等",
+      "status": "pending",
+      "action": "run_test",
+      "command": "cd /mnt/e/github/aiclouddeploy/gpu-cluster-deploy && python -c \"from src.config_loader import ConfigLoader; loader = ConfigLoader('/mnt/e/openclaw-workspace/deploy/config/test-cluster/'); loader.load_cluster_config(); loader.load_versions_config(); errors = loader.validate(); print('Validation:', 'PASSED' if not errors else errors)\"",
+      "risk_level": "low",
+      "auto_approve": true,
+      "depends_on": [5]
+    },
+    {
+      "step_id": 7,
+      "phase": "Phase 3: SSH管理器测试",
+      "name": "测试SSHManager初始化",
+      "description": "测试SSH管理器的跳板机连接功能",
+      "status": "pending",
+      "action": "run_test",
+      "command": "cd /mnt/e/github/aiclouddeploy/gpu-cluster-deploy && python -c \"\nfrom src.ssh_manager import SSHManager\njumphost_config = {\n    'host': '36.103.234.31',\n    'port': 22,\n    'username': 'ubuntu',\n    'password': 'BDZ2.7YbtEwJfDRi'\n}\nmanager = SSHManager(jumphost_config)\nresult = manager.connect_jumphost(timeout=30)\nprint(f'Jumphost connection: {\\\"SUCCESS\\\" if result else \\\"FAILED\\\"}')\nif result:\n    manager.disconnect_jumphost()\n\"",
+      "risk_level": "low",
+      "auto_approve": true,
+      "depends_on": [6]
+    },
+    {
+      "step_id": 8,
+      "phase": "Phase 3: SSH管理器测试",
+      "name": "测试通过跳板机连接目标服务器",
+      "description": "测试SSHManager的get_connection方法，连接到内网服务器",
+      "status": "pending",
+      "action": "run_test",
+      "command": "cd /mnt/e/github/aiclouddeploy/gpu-cluster-deploy && python -c \"\nfrom src.ssh_manager import SSHManager\njumphost_config = {\n    'host': '36.103.234.31',\n    'port': 22,\n    'username': 'ubuntu',\n    'password': 'BDZ2.7YbtEwJfDRi'\n}\nmanager = SSHManager(jumphost_config)\nmanager.connect_jumphost(timeout=30)\nconn = manager.get_connection(host='10.0.18.87', username='ubuntu', password='BDZ2.7YbtEwJfDRi', timeout=30)\nif conn:\n    result = conn.execute('hostname && echo Connection OK')\n    print(f'Target connection: SUCCESS')\n    print(f'Output: {result.stdout.strip()}')\n    manager.close_all()\nelse:\n    print('Target connection: FAILED')\n\"",
+      "risk_level": "low",
+      "auto_approve": true,
+      "depends_on": [7]
+    },
+    {
+      "step_id": 9,
+      "phase": "Phase 3: SSH管理器测试",
+      "name": "测试批量命令执行",
+      "description": "测试在多个目标服务器上批量执行命令",
+      "status": "pending",
+      "action": "run_test",
+      "command": "cd /mnt/e/github/aiclouddeploy/gpu-cluster-deploy && python -c \"\nfrom src.ssh_manager import SSHManager\njumphost_config = {\n    'host': '36.103.234.31',\n    'port': 22,\n    'username': 'ubuntu',\n    'password': 'BDZ2.7YbtEwJfDRi'\n}\nmanager = SSHManager(jumphost_config)\nmanager.connect_jumphost(timeout=30)\nresults = manager.execute_on_hosts(\n    hosts=['10.0.18.87', '10.0.19.134'],\n    command='hostname && uptime',\n    username='ubuntu',\n    password='BDZ2.7YbtEwJfDRi',  # Note: second server has different password\n    timeout=60\n)\nfor host, result in results.items():\n    print(f'{host}: {\\\"SUCCESS\\\" if result.success else \\\"FAILED\\\"} - {result.stdout.strip()[:50]}')\nmanager.close_all()\n\"",
+      "risk_level": "low",
+      "auto_approve": true,
+      "depends_on": [8]
+    },
+    {
+      "step_id": 10,
+      "phase": "Phase 4: 设备检测测试",
+      "name": "检测GPU设备",
+      "description": "在目标服务器上检测GPU设备是否存在",
+      "status": "pending",
+      "action": "run_test",
+      "command": "cd /mnt/e/github/aiclouddeploy/gpu-cluster-deploy && python -c \"\nfrom src.ssh_manager import SSHManager\njumphost_config = {\n    'host': '36.103.234.31',\n    'port': 22,\n    'username': 'ubuntu',\n    'password': 'BDZ2.7YbtEwJfDRi'\n}\nmanager = SSHManager(jumphost_config)\nmanager.connect_jumphost(timeout=30)\nconn = manager.get_connection(host='10.0.18.87', username='ubuntu', password='BDZ2.7YbtEwJfDRi', timeout=30)\nif conn:\n    result = conn.execute('lspci | grep -i nvidia || echo No NVIDIA GPU found')\n    print(f'GPU Detection:\\n{result.stdout}')\n    manager.close_all()\n\"",
+      "risk_level": "low",
+      "auto_approve": true,
+      "depends_on": [8]
+    },
+    {
+      "step_id": 11,
+      "phase": "Phase 4: 设备检测测试",
+      "name": "检测RDMA网卡",
+      "description": "检测RDMA网卡设备",
+      "status": "pending",
+      "action": "run_test",
+      "command": "cd /mnt/e/github/aiclouddeploy/gpu-cluster-deploy && python -c \"\nfrom src.ssh_manager import SSHManager\njumphost_config = {\n    'host': '36.103.234.31',\n    'port': 22,\n    'username': 'ubuntu',\n    'password': 'BDZ2.7YbtEwJfDRi'\n}\nmanager = SSHManager(jumphost_config)\nmanager.connect_jumphost(timeout=30)\nconn = manager.get_connection(host='10.0.18.87', username='ubuntu', password='BDZ2.7YbtEwJfDRi', timeout=30)\nif conn:\n    result = conn.execute('ibstat 2>/dev/null || lspci | grep -i mellanox || echo No RDMA devices found')\n    print(f'RDMA Detection:\\n{result.stdout}')\n    manager.close_all()\n\"",
+      "risk_level": "low",
+      "auto_approve": true,
+      "depends_on": [8]
+    },
+    {
+      "step_id": 12,
+      "phase": "Phase 4: 设备检测测试",
+      "name": "检测NVMe磁盘",
+      "description": "检测NVMe磁盘设备",
+      "status": "pending",
+      "action": "run_test",
+      "command": "cd /mnt/e/github/aiclouddeploy/gpu-cluster-deploy && python -c \"\nfrom src.ssh_manager import SSHManager\njumphost_config = {\n    'host': '36.103.234.31',\n    'port': 22,\n    'username': 'ubuntu',\n    'password': 'BDZ2.7YbtEwJfDRi'\n}\nmanager = SSHManager(jumphost_config)\nmanager.connect_jumphost(timeout=30)\nconn = manager.get_connection(host='10.0.18.87', username='ubuntu', password='BDZ2.7YbtEwJfDRi', timeout=30)\nif conn:\n    result = conn.execute('lsblk -d -o NAME,SIZE,TYPE | grep -E \\\"disk|NAME\\\" || echo No disks found')\n    print(f'Disk Detection:\\n{result.stdout}')\n    manager.close_all()\n\"",
+      "risk_level": "low",
+      "auto_approve": true,
+      "depends_on": [8]
+    },
+    {
+      "step_id": 13,
+      "phase": "Phase 5: 部署流程测试",
+      "name": "运行dry-run模式预检",
+      "description": "使用--dry-run参数运行部署程序，验证预检流程",
+      "status": "pending",
+      "action": "run_test",
+      "command": "cd /mnt/e/github/aiclouddeploy/gpu-cluster-deploy && python src/main.py --config-dir /mnt/e/openclaw-workspace/deploy/config/test-cluster/ --dry-run --log-level DEBUG 2>&1 | head -100",
+      "risk_level": "low",
+      "auto_approve": true,
+      "depends_on": [12]
+    },
+    {
+      "step_id": 14,
+      "phase": "Phase 5: 部署流程测试",
+      "name": "测试连通性检查模块",
+      "description": "测试节点连通性检查功能",
+      "status": "pending",
+      "action": "run_test",
+      "command": "cd /mnt/e/github/aiclouddeploy/gpu-cluster-deploy && python -c \"\nfrom src.config_loader import ConfigLoader\nfrom src.ssh_manager import create_ssh_manager_from_config\nloader = ConfigLoader('/mnt/e/openclaw-workspace/deploy/config/test-cluster/')\nconfig = loader.load_cluster_config()\nprint(f'Loaded cluster: {config.name}')\nprint(f'Jumphost: {config.jumphost.host if config.jumphost else None}')\nprint(f'Nodes: {[(n.hostname, n.ip) for n in config.nodes]}')\n\"",
+      "risk_level": "low",
+      "auto_approve": true,
+      "depends_on": [13]
+    },
+    {
+      "step_id": 15,
+      "phase": "Phase 6: 清理和报告",
+      "name": "收集测试结果",
+      "description": "汇总所有测试结果，生成测试报告",
+      "status": "pending",
+      "action": "report",
+      "risk_level": "low",
+      "auto_approve": true,
+      "depends_on": [14]
+    },
+    {
+      "step_id": 16,
+      "phase": "Phase 6: 清理和报告",
+      "name": "清理测试配置",
+      "description": "清理测试过程中创建的临时配置文件",
+      "status": "pending",
+      "action": "cleanup",
+      "risk_level": "low",
+      "auto_approve": true,
+      "depends_on": [15]
+    }
+  ],
+  "metadata": {
+    "project_path": "/mnt/e/github/aiclouddeploy/gpu-cluster-deploy",
+    "test_cluster_name": "test-cluster",
+    "estimated_duration": "30-60 minutes",
+    "notes": [
+      "第二个目标服务器密码与跳板机和第一个目标服务器不同",
+      "需要在配置文件中正确设置不同节点的认证信息",
+      "测试应从基础连接开始，逐步验证功能"
+    ]
+  }
+}
