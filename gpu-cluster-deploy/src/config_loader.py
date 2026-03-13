@@ -25,6 +25,7 @@ from src.models.cluster import (
     NICConfig,
     NICMappingConfig,
     NICRenameConfig,
+    SSHKeyConfig,
 )
 
 
@@ -203,6 +204,7 @@ class ConfigLoader:
             nodes.append(NodeConfig(
                 hostname=node_raw.get("hostname", ""),
                 ip=node_raw.get("ip", ""),
+                port=node_raw.get("port", 22),
                 roles=node_raw.get("roles", []),
                 storage=storage,
                 username=node_raw.get("username"),
@@ -339,15 +341,27 @@ class ConfigLoader:
         else:
             all_nodes = nodes
 
+        # 解析 SSH 免密配置
+        ssh_key_raw = raw.get("ssh_key", {})
+        # 无论是否配置 ssh_key，都创建默认配置
+        ssh_key = SSHKeyConfig(
+            enabled=ssh_key_raw.get("enabled", True),
+            users=ssh_key_raw.get("users"),  # None 表示自动检测部署用户
+            private_key=ssh_key_raw.get("private_key"),
+            public_key=ssh_key_raw.get("public_key")
+        )
+
         return ClusterConfig(
             name=cluster_raw.get("name", "gpu-cluster"),
             description=cluster_raw.get("description", ""),
+            deploy_user=cluster_raw.get("deploy_user"),
             jumphost=jumphost,
             nodes=all_nodes,
             node_batch=node_batch,
             nfs=nfs,
             time_sync=time_sync,
-            network=network
+            network=network,
+            ssh_key=ssh_key
         )
 
     def _generate_batch_nodes(self, node_batch: NodeBatchConfig, overrides: List[Dict]) -> List[NodeConfig]:
@@ -691,6 +705,10 @@ class ConfigLoader:
                     errors.append("批量节点主机名前缀不能为空")
                 if not self.cluster_config.node_batch.base_ip_prefix:
                     errors.append("批量节点IP前缀不能为空")
+            # 批量节点必须有 auth_template.username 或 deploy_user
+            if not self.cluster_config.node_batch.auth_template or not self.cluster_config.node_batch.auth_template.username:
+                if not self.cluster_config.deploy_user:
+                    errors.append("批量节点必须指定登录用户 (node_batch.auth_template.username 或 cluster.deploy_user)")
         else:
             # 传统节点验证
             if not self.cluster_config.nodes:
@@ -702,6 +720,9 @@ class ConfigLoader:
                         errors.append(f"节点[{i}]主机名不能为空")
                     if not node.ip:
                         errors.append(f"节点[{i}]IP地址不能为空")
+                    # 必须指定登录用户
+                    if not node.username:
+                        errors.append(f"节点[{i}]必须指定登录用户 (username)")
                     if node.storage:
                         try:
                             node.storage._validate()

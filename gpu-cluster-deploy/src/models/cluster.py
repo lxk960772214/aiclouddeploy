@@ -90,6 +90,7 @@ class NodeConfig:
     ip: str
     roles: List[str] = field(default_factory=list)
     storage: Optional[StorageConfig] = None
+    port: int = 22  # SSH端口
     username: Optional[str] = None  # SSH用户名
     password: Optional[str] = None  # SSH密码
     private_key: Optional[str] = None  # SSH私钥路径
@@ -110,6 +111,7 @@ class NodeConfig:
         return {
             "hostname": self.hostname,
             "ip": self.ip,
+            "port": self.port,
             "roles": self.roles,
             "storage": self.storage.to_dict() if self.storage else None
         }
@@ -213,6 +215,24 @@ class NICRenameConfig:
     backup_original: bool = True
     skip_if_exists: bool = True
     dry_run: bool = False
+
+
+@dataclass
+class SSHKeyConfig:
+    """SSH免密登录配置"""
+    enabled: bool = True  # 是否启用免密配置
+    users: Optional[List[str]] = None  # 要配置免密的用户列表，None表示自动检测部署用户
+    # 密钥配置（可选，不指定则自动生成）
+    private_key: Optional[str] = None  # 指定私钥路径
+    public_key: Optional[str] = None  # 指定公钥路径或公钥内容
+
+    def to_dict(self) -> Dict:
+        return {
+            "enabled": self.enabled,
+            "users": self.users,
+            "private_key": "***" if self.private_key else None,
+            "public_key": "***" if self.public_key else None
+        }
 
 
 @dataclass
@@ -336,12 +356,14 @@ class ClusterConfig:
     """集群配置"""
     name: str = "gpu-cluster"
     description: str = ""
+    deploy_user: Optional[str] = None  # 部署用户（可选，默认使用登录用户）
     jumphost: Optional[JumphostConfig] = None
     nodes: List[NodeConfig] = field(default_factory=list)
     node_batch: NodeBatchConfig = field(default_factory=NodeBatchConfig)  # 批量节点配置
     nfs: NFSConfig = field(default_factory=NFSConfig)
     time_sync: TimeSyncConfig = field(default_factory=TimeSyncConfig)
     network: NetworkConfig = field(default_factory=NetworkConfig)
+    ssh_key: Optional["SSHKeyConfig"] = None  # SSH免密登录配置
 
     @property
     def node_count(self) -> int:
@@ -392,11 +414,13 @@ class ClusterConfig:
         return {
             "name": self.name,
             "description": self.description,
+            "deploy_user": self.deploy_user,
             "jumphost": self.jumphost.to_dict() if self.jumphost else None,
             "nodes": [node.to_dict() for node in self.nodes],
             "node_batch": self.node_batch.to_dict(),
             "nfs": self.nfs.to_dict(),
             "time_sync": self.time_sync.to_dict(),
             "network": self.network.to_dict(),
+            "ssh_key": self.ssh_key.to_dict() if self.ssh_key else None,
             "node_count": self.node_count
         }

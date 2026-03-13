@@ -91,7 +91,8 @@ class SSHConnection:
                 channel = transport.open_channel('direct-tcpip', dest_addr, local_addr)
 
                 if self.private_key:
-                    key = paramiko.RSAKey.from_private_key_file(self.private_key)
+                    # 密钥认证
+                    key = paramiko.RSAKey.from_private_key_file(os.path.expanduser(self.private_key))
                     self.client.connect(
                         hostname=self.host,
                         port=self.port,
@@ -102,7 +103,8 @@ class SSHConnection:
                         allow_agent=False,
                         look_for_keys=False
                     )
-                else:
+                elif self.password:
+                    # 密码认证
                     self.client.connect(
                         hostname=self.host,
                         port=self.port,
@@ -112,11 +114,23 @@ class SSHConnection:
                         timeout=timeout,
                         allow_agent=False,
                         look_for_keys=False
+                    )
+                else:
+                    # 免密登录：使用 SSH agent 或系统密钥
+                    self.client.connect(
+                        hostname=self.host,
+                        port=self.port,
+                        username=self.username,
+                        sock=channel,
+                        timeout=timeout,
+                        allow_agent=True,
+                        look_for_keys=True
                     )
             else:
                 # 直连
                 if self.private_key:
-                    key = paramiko.RSAKey.from_private_key_file(self.private_key)
+                    # 密钥认证
+                    key = paramiko.RSAKey.from_private_key_file(os.path.expanduser(self.private_key))
                     self.client.connect(
                         hostname=self.host,
                         port=self.port,
@@ -126,7 +140,8 @@ class SSHConnection:
                         allow_agent=False,
                         look_for_keys=False
                     )
-                else:
+                elif self.password:
+                    # 密码认证
                     self.client.connect(
                         hostname=self.host,
                         port=self.port,
@@ -135,6 +150,16 @@ class SSHConnection:
                         timeout=timeout,
                         allow_agent=False,
                         look_for_keys=False
+                    )
+                else:
+                    # 免密登录：使用 SSH agent 或系统密钥
+                    self.client.connect(
+                        hostname=self.host,
+                        port=self.port,
+                        username=self.username,
+                        timeout=timeout,
+                        allow_agent=True,
+                        look_for_keys=True
                     )
 
             self._connected = True
@@ -317,6 +342,15 @@ class SSHManager:
         self.jump_client: Optional[paramiko.SSHClient] = None
         self.connections: Dict[str, SSHConnection] = {}
         self._jump_connected = False
+        # 保存默认认证信息（来自 jumphost 配置，用于连接内部节点）
+        if jumphost_config:
+            self._default_username = jumphost_config.get("username", "ubuntu")
+            self._default_private_key = jumphost_config.get("private_key")
+            self._default_password = jumphost_config.get("password")
+        else:
+            self._default_username = "ubuntu"
+            self._default_private_key = None
+            self._default_password = None
 
     def connect_jumphost(self, timeout: int = 30) -> bool:
         """连接跳转服务器"""
@@ -336,7 +370,7 @@ class SSHManager:
             private_key = self.jumphost_config.get("private_key")
 
             if private_key:
-                key = paramiko.RSAKey.from_private_key_file(private_key)
+                key = paramiko.RSAKey.from_private_key_file(os.path.expanduser(private_key))
                 self.jump_client.connect(
                     hostname=host,
                     port=port,
@@ -385,11 +419,31 @@ class SSHManager:
         logger.info("跳转服务器连接已断开")
 
     def get_connection(self, host: str, port: int = 22,
-                       username: str = "ubuntu",
+                       username: Optional[str] = None,
                        password: Optional[str] = None,
                        private_key: Optional[str] = None,
                        timeout: int = 30) -> Optional[SSHConnection]:
-        """获取或创建SSH连接"""
+        """获取或创建SSH连接
+
+        Args:
+            host: 目标主机
+            port: SSH端口
+            username: 用户名（默认使用 jumphost 的用户名）
+            password: 密码（默认使用 jumphost 的密码）
+            private_key: 私钥路径（默认使用 jumphost 的私钥）
+            timeout: 连接超时时间
+
+        Returns:
+            SSHConnection 或 None
+        """
+        # 使用默认认证信息（来自 jumphost 配置）
+        if username is None:
+            username = self._default_username
+        if password is None:
+            password = self._default_password
+        if private_key is None:
+            private_key = self._default_private_key
+
         conn_key = f"{username}@{host}:{port}"
 
         # 检查现有连接
@@ -424,13 +478,36 @@ class SSHManager:
 
     def execute_on_host(self, host: str, command: str,
                         port: int = 22,
-                        username: str = "ubuntu",
+                        username: Optional[str] = None,
                         password: Optional[str] = None,
                         private_key: Optional[str] = None,
                         timeout: int = 300,
                         sudo: bool = False,
                         sudo_password: Optional[str] = None) -> SSHResult:
-        """在指定主机上执行命令"""
+        """在指定主机上执行命令
+
+        Args:
+            host: 目标主机
+            command: 要执行的命令
+            port: SSH端口
+            username: 用户名（默认使用 jumphost 的用户名）
+            password: 密码（默认使用 jumphost 的密码）
+            private_key: 私钥路径（默认使用 jumphost 的私钥）
+            timeout: 超时时间
+            sudo: 是否使用 sudo
+            sudo_password: sudo 密码
+
+        Returns:
+            SSHResult: 执行结果
+        """
+        # 使用默认认证信息（来自 jumphost 配置）
+        if username is None:
+            username = self._default_username
+        if password is None:
+            password = self._default_password
+        if private_key is None:
+            private_key = self._default_private_key
+
         conn = self.get_connection(
             host=host,
             port=port,
@@ -457,13 +534,21 @@ class SSHManager:
 
     def execute_on_hosts(self, hosts: List[str], command: str,
                          port: int = 22,
-                         username: str = "ubuntu",
+                         username: Optional[str] = None,
                          password: Optional[str] = None,
                          private_key: Optional[str] = None,
                          timeout: int = 300,
                          sudo: bool = False,
                          sudo_password: Optional[str] = None) -> Dict[str, SSHResult]:
         """在多个主机上执行命令（并行）"""
+        # 使用默认认证信息（来自 jumphost 配置）
+        if username is None:
+            username = self._default_username
+        if password is None:
+            password = self._default_password
+        if private_key is None:
+            private_key = self._default_private_key
+
         import concurrent.futures
 
         results = {}
