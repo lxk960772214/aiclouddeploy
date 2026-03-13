@@ -381,7 +381,8 @@ class BaseStep(ABC):
 
     def execute_on_host(self, host: str, command: str,
                         sudo: bool = False, username: str = None,
-                        password: str = None, timeout: int = None) -> Dict[str, Any]:
+                        password: str = None, timeout: int = None,
+                        use_login_user: bool = False) -> Dict[str, Any]:
         """
         在单个主机上执行命令
 
@@ -389,9 +390,11 @@ class BaseStep(ABC):
             host: 主机
             command: 命令
             sudo: 是否使用sudo
-            username: 用户名（可选，默认从配置获取）
-            password: 密码（可选，默认从配置获取）
+            username: 用户名（可选，默认使用部署用户）
+            password: 密码（可选）
             timeout: 超时时间（秒），默认使用 self.timeout
+            use_login_user: True = 使用登录用户（step 0-11 用）
+                           False = 使用部署用户（后续步骤用，默认）
 
         Returns:
             执行结果字典
@@ -408,32 +411,34 @@ class BaseStep(ABC):
         if timeout is None:
             timeout = self.timeout
 
-        # 尝试从节点配置获取认证信息
-        if username is None or password is None:
-            node_config = self._get_node_config(host)
-            if node_config:
-                # 检查 NodeConfig 是否有 username 和 password 属性
-                if hasattr(node_config, 'username') and node_config.username:
-                    username = username or node_config.username
-                if hasattr(node_config, 'password') and node_config.password:
-                    password = password or node_config.password
+        # 获取登录用户和部署用户
+        login_user = self._get_login_user(host)
+        deploy_user = self._get_deploy_user(host)
 
-        # 如果仍然没有认证信息，尝试从 jumphost.node_auth 获取
-        if (username is None or password is None) and self.config.jumphost:
-            if self.config.jumphost.node_auth:
-                if username is None:
-                    username = self.config.jumphost.node_auth.username
-                if password is None:
-                    password = self.config.jumphost.node_auth.password
-
-        # 默认用户名
+        # 确定连接用户
         if username is None:
-            username = "ubuntu"
+            if use_login_user:
+                username = login_user
+            else:
+                username = deploy_user
+
+        # 获取认证信息
+        # 关键逻辑：当部署用户 = 登录用户时，仍需使用登录用户的认证信息
+        if use_login_user or deploy_user == login_user:
+            # 使用登录用户的认证信息
+            if password is None:
+                password = self._get_login_password(host)
+            private_key = self._get_login_private_key(host)
+        else:
+            # 部署用户 ≠ 登录用户，且 use_login_user=False
+            # 此时部署用户已配置免密登录（step_11 已完成），不需要密码/密钥
+            private_key = None
 
         result = self.ssh_manager.execute_on_host(
             host, command,
             username=username,
             password=password,
+            private_key=private_key,
             sudo=sudo,
             sudo_password=password,  # 使用相同的密码作为 sudo 密码
             timeout=timeout
@@ -486,6 +491,42 @@ class BaseStep(ABC):
             if node.ip == host or node.hostname == host:
                 return node
         return None
+
+    def _get_login_user(self, host: str) -> str:
+        """获取登录用户（必须指定）"""
+        node = self._get_node_config(host)
+        if node and hasattr(node, 'username') and node.username:
+            return node.username
+        return ""
+
+    def _get_login_password(self, host: str) -> Optional[str]:
+        """获取登录用户的密码"""
+        node = self._get_node_config(host)
+        if node and hasattr(node, 'password') and node.password:
+            return node.password
+        return None
+
+    def _get_login_private_key(self, host: str) -> Optional[str]:
+        """获取登录用户的私钥路径"""
+        node = self._get_node_config(host)
+        if node and hasattr(node, 'private_key') and node.private_key:
+            return node.private_key
+        return None
+
+    def _get_deploy_user(self, host: str) -> str:
+        """
+        获取部署用户
+
+        优先级:
+        1. cluster.deploy_user
+        2. nodes.username (登录用户)
+        """
+        # 优先使用集群级别的部署用户
+        if self.config and hasattr(self.config, 'deploy_user') and self.config.deploy_user:
+            return self.config.deploy_user
+
+        # 否则使用登录用户
+        return self._get_login_user(host)
 
     def put_file(self, hosts: List[str], local_path: str, remote_path: str) -> Dict[str, bool]:
         """

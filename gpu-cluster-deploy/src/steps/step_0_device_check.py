@@ -62,8 +62,12 @@ class Step0DeviceCheck(BaseStep):
             )
 
         # 1. 创建设备检查器
+        # 使用登录用户连接（step_0d 之前，部署用户可能不存在）
+        def execute_with_login_user(host, command, **kwargs):
+            return self.execute_on_host(host, command, use_login_user=True, **kwargs)
+
         checker = DeviceConsistencyChecker(
-            execute_func=self.execute_on_host,
+            execute_func=execute_with_login_user,
             config=self.device_check_config
         )
 
@@ -73,7 +77,7 @@ class Step0DeviceCheck(BaseStep):
 
         # 3. 执行GPU拓扑检查
         self.logger.info("开始GPU拓扑检查...")
-        topo_checker = GPUTopologyChecker(execute_func=self.execute_on_host)
+        topo_checker = GPUTopologyChecker(execute_func=execute_with_login_user)
         topo_comparison = topo_checker.compare_cluster_topology(hosts)
 
         # 4. 生成修复建议
@@ -162,8 +166,12 @@ class Step0DeviceCheck(BaseStep):
 
     def generate_report(self, hosts: List[str]) -> str:
         """生成可读的检查报告"""
+        # 使用登录用户连接
+        def execute_with_login_user(host, command, **kwargs):
+            return self.execute_on_host(host, command, use_login_user=True, **kwargs)
+
         checker = DeviceConsistencyChecker(
-            execute_func=self.execute_on_host,
+            execute_func=execute_with_login_user,
             config=self.device_check_config
         )
         report = checker.check_cluster(hosts, self.config.name)

@@ -78,28 +78,27 @@ class NetworkCheckStep(BaseStep):
         )
 
     def _prepare_host_auth(self, hosts: List[str]) -> List[tuple]:
-        """准备主机认证信息列表"""
+        """准备主机认证信息列表（使用登录用户）"""
         host_auth_list = []
 
         for host in hosts:
-            # 尝试从节点配置获取认证信息
-            node_config = self._get_node_config(host)
-            if node_config:
-                username = getattr(node_config, 'username', None)
-                password = getattr(node_config, 'password', None)
-            else:
-                username = None
-                password = None
+            # 使用登录用户（必须在节点配置中指定）
+            login_user = self._get_login_user(host)
+            login_password = self._get_login_password(host)
+            login_private_key = self._get_login_private_key(host)
 
-            # 使用默认认证（jumphost.node_auth）
-            if not username and self.config.jumphost and self.config.jumphost.node_auth:
-                username = self.config.jumphost.node_auth.username
-                password = self.config.jumphost.node_auth.password
+            if not login_user:
+                # 尝试从 jumphost.node_auth 获取默认认证
+                if self.config.jumphost and self.config.jumphost.node_auth:
+                    login_user = self.config.jumphost.node_auth.username
+                    login_password = self.config.jumphost.node_auth.password
+                    login_private_key = self.config.jumphost.node_auth.private_key
 
-            if not username:
-                username = "ubuntu"
+            if not login_user:
+                # 最后的默认值
+                login_user = "ubuntu"
 
-            host_auth_list.append((host, username, password))
+            host_auth_list.append((host, login_user, login_password))
 
         return host_auth_list
 

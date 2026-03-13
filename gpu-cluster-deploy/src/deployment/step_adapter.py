@@ -29,7 +29,7 @@ STEP_CATEGORY_MAP = {
     "step_9": ModuleCategory.SYSTEM,
     # Group C: User and SSH
     "step_10": ModuleCategory.SECURITY,
-    "step_11": ModuleCategory.SECURITY,
+    "step_0d": ModuleCategory.SECURITY,
     "step_12": ModuleCategory.SYSTEM,
     "step_13": ModuleCategory.SYSTEM,
     # Group D: System optimization

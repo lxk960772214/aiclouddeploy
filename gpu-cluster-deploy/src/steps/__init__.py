@@ -41,7 +41,7 @@ STEP_METADATA = {
     "step_9": {"category": StepCategory.SYSTEM, "tags": ["hostname", "hosts", "network"]},
     # Group C: User and SSH
     "step_10": {"category": StepCategory.SECURITY, "tags": ["user", "account"]},
-    "step_11": {"category": StepCategory.SECURITY, "tags": ["ssh", "keys", "auth"]},
+    "step_0d": {"category": StepCategory.SECURITY, "tags": ["ssh", "keys", "auth"]},
     "step_12": {"category": StepCategory.SYSTEM, "tags": ["cpu", "performance"]},
     "step_13": {"category": StepCategory.SYSTEM, "tags": ["limits", "ulimit"]},
     # Group D: System optimization
@@ -101,7 +101,7 @@ from .step_9_hostname_hosts import HostnameHosts
 
 # Group C: 用户与SSH
 from .step_10_create_user import CreateUser
-from .step_11_ssh_key import SSHKeySetup
+from .step_0d_ssh_key import SSHKeySetup
 from .step_12_cpu_performance import CPUPerformance
 from .step_13_file_limits import FileLimits
 
@@ -149,12 +149,12 @@ from .step_final_verification import FinalVerification
 # 2. SSH免密使用IP连接，不依赖hosts
 # 3. 控制机需要预先安装pdsh
 ALL_STEPS = [
-    # Phase 0: 设备检查
-    Step0DeviceCheck,
+    # Phase 0: 设备检查（使用登录用户）
+    Step0DeviceCheck,       # step_00: 设备一致性检查
     NetworkCheckStep,       # step_0b: 网络连通性检查
     # Phase 1: 初始化配置（SSH免密优先，为后续pdsh批量执行做准备）
-    SSHKeySetup,            # step_11: 配置SSH免密（SSH管理器模式）
-    HostnameHosts,          # step_09: 配置hosts（SSH管理器模式）
+    SSHKeySetup,            # step_0d: 配置SSH免密（使用登录用户）
+    HostnameHosts,          # step_09: 配置hosts（使用部署用户免密）
     # --- SSH免密和hosts完成后切换到pdsh模式 ---
     InstallDependencies,    # step_01: 安装依赖（pdsh模式）
     # Phase 2: 系统检查
