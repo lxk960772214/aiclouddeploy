@@ -91,19 +91,20 @@ class IBWriteBWTester:
         避免并发测试时的端口冲突
 
         Args:
-            device: RDMA设备名称
+            device: RDMA设备名称 (如 mlx5_0, mlx5_1)
             port_base: 基础端口号
 
         Returns:
             计算出的端口号
         """
-        # 从设备名中提取数字
-        match = re.search(r'(\d+)', device)
-        if match:
-            device_num = int(match.group(1))
+        # 从设备名中提取最后一个数字 (如 mlx5_0 -> 0, mlx5_1 -> 1)
+        matches = re.findall(r'(\d+)', device)
+        if matches:
+            # 使用最后一个数字作为设备编号
+            device_num = int(matches[-1])
         else:
-            # 使用hash生成
-            device_num = hash(device) % 1000
+            # 如果没有数字，使用稳定的hash生成
+            device_num = int.from_bytes(device.encode(), 'little') % 1000
 
         return port_base + device_num * 10
 
@@ -207,6 +208,11 @@ class IBWriteBWTester:
                 if config.theoretical_bandwidth_gbps > 0:
                     result.bandwidth_percent = (bandwidth / config.theoretical_bandwidth_gbps) * 100
                 result.success = result.bandwidth_percent >= config.min_bandwidth_percent
+                if not result.success:
+                    if bandwidth > 0:
+                        result.error_message = f"带宽 {bandwidth:.1f} Gbps ({result.bandwidth_percent:.1f}%) 低于阈值 {config.min_bandwidth_percent}%"
+                    else:
+                        result.error_message = "带宽为0，测试未产生有效数据"
             else:
                 result.error_message = "无法解析带宽结果"
 
@@ -236,6 +242,10 @@ class IBWriteBWTester:
         解析ib_write_bw输出，提取带宽值
 
         输出格式示例:
+        #bytes     #iterations    BW peak[MB/sec]    BW average[MB/sec]   MsgRate[Mpps]
+        65536      1121952          0.00               11684.41            0.186951
+
+        或者简单格式:
         #bytes     #iterations    BW peak[MB/sec]    BW average[MB/sec]
         65536      1000           48000.00           47500.00
 
@@ -243,29 +253,36 @@ class IBWriteBWTester:
             带宽值(Gbps)，如果解析失败返回None
         """
         try:
-            # 查找最后一行数字
             lines = output.strip().split('\n')
-            for line in reversed(lines):
-                # 匹配带宽值 (MB/sec)
-                match = re.search(r'(\d+\.\d+)\s*$', line.strip())
-                if match:
-                    bandwidth_mbps = float(match.group(1))
-                    # 转换为Gbps (MB/s * 8 / 1000 = Gbps)
-                    bandwidth_gbps = bandwidth_mbps * 8 / 1000
-                    return bandwidth_gbps
 
-            # 尝试另一种格式
-            # 65536      1000           48000.00
+            # 方法1: 查找包含数字的数据行（以数字开头）
             for line in reversed(lines):
+                line = line.strip()
+                # 跳过空行和标题行
+                if not line or line.startswith('#') or line.startswith('-'):
+                    continue
+
                 parts = line.split()
+                # 数据行通常有 4-6 列: #bytes, #iterations, BW peak, BW average, [MsgRate]
                 if len(parts) >= 4:
                     try:
-                        # 第四列通常是平均带宽
+                        # 第一列应该是 bytes (整数)
+                        int(parts[0])
+                        # 第四列 (index 3) 是 BW average[MB/sec]
                         bandwidth_mbps = float(parts[3])
-                        bandwidth_gbps = bandwidth_mbps * 8 / 1000
-                        return bandwidth_gbps
+                        if bandwidth_mbps > 0:
+                            # 转换为Gbps (MB/s * 8 / 1000 = Gbps)
+                            bandwidth_gbps = bandwidth_mbps * 8 / 1000
+                            return bandwidth_gbps
                     except (ValueError, IndexError):
                         continue
+
+            # 方法2: 尝试匹配特定格式
+            # 查找 BW average 列
+            for line in lines:
+                if 'BW average' in line or 'BW peak' in line:
+                    # 这可能是标题行，下一行是数据
+                    continue
 
             return None
 

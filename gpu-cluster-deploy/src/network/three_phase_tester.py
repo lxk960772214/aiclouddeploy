@@ -555,7 +555,7 @@ class ThreePhaseTester:
                 success = result.get("success", False)
                 bandwidth = result.get("bandwidth_gbps", 0)
                 bandwidth_percent = result.get("bandwidth_percent", 0)
-                error_msg = result.get("error_message", "")
+                error_msg = result.get("error_message", "") or "未知错误"
 
                 # 更新服务器端设备统计
                 if server_host in device_stats and server_device in device_stats[server_host]:
