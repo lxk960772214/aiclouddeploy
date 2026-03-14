@@ -109,31 +109,47 @@ class RDMADetector:
         return device_info
 
     def _detect_via_sysfs(self, host: str, device: str, info: RDMADeviceInfo) -> bool:
-        """通过sysfs检测设备类型"""
+        """通过sysfs检测设备类型
+
+        关键判断：使用 link_layer 而不是 transport 来区分 InfiniBand 和 RoCE
+        - link_layer: InfiniBand -> 真正的 InfiniBand 网络
+        - link_layer: Ethernet -> RoCE (RDMA over Converged Ethernet)
+
+        注意：transport 对于 RoCE 也会返回 "InfiniBand"，因为 RoCE 使用 IB 传输协议
+        """
         if not self.ssh_manager:
             return False
 
         try:
-            # 读取transport类型
-            cmd = f"cat /sys/class/infiniband/{device}/transport 2>/dev/null"
-            result = self.ssh_manager.execute_on_host(host, cmd, timeout=30)
+            # 先读取 link_layer（关键判断依据）
+            link_layer_cmd = f"cat /sys/class/infiniband/{device}/ports/1/link_layer 2>/dev/null"
+            link_layer_result = self.ssh_manager.execute_on_host(host, link_layer_cmd, timeout=30)
 
-            if result.success and result.stdout.strip():
-                transport = result.stdout.strip().lower()
-                info.transport = transport
+            if link_layer_result.success and link_layer_result.stdout.strip():
+                link_layer = link_layer_result.stdout.strip().lower()
+                info.link_layer = link_layer
 
-                if transport == "infiniband":
+                # 根据 link_layer 判断设备类型
+                if link_layer == "infiniband":
                     info.device_type = RDMADeviceType.INFINIBAND
-                elif "roce" in transport:
-                    if "v2" in transport:
-                        info.device_type = RDMADeviceType.ROCEV2
-                    else:
-                        info.device_type = RDMADeviceType.ROCE
+                elif link_layer == "ethernet":
+                    # Ethernet link_layer 表示 RoCE
+                    info.device_type = RDMADeviceType.ROCE
                 else:
                     info.device_type = RDMADeviceType.UNKNOWN
 
-                # 读取更多设备信息
-                self._read_sysfs_attrs(host, device, info)
+            # 读取 transport（补充信息）
+            transport_cmd = f"cat /sys/class/infiniband/{device}/transport 2>/dev/null"
+            transport_result = self.ssh_manager.execute_on_host(host, transport_cmd, timeout=30)
+
+            if transport_result.success and transport_result.stdout.strip():
+                info.transport = transport_result.stdout.strip().lower()
+
+            # 读取更多设备信息
+            self._read_sysfs_attrs(host, device, info)
+
+            # 如果 link_layer 检测成功，返回 True
+            if info.link_layer:
                 return True
 
             return False
