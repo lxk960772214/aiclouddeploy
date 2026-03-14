@@ -32,6 +32,8 @@ class BandwidthTestResult:
     duration: float = 0.0
     error_message: str = ""
     raw_output: str = ""
+    test_command: str = ""  # 实际执行的测试命令
+    device_type: str = ""   # 设备类型 (roce/infiniband)
 
     def to_dict(self) -> Dict:
         return {
@@ -45,7 +47,9 @@ class BandwidthTestResult:
             "bandwidth_percent": round(self.bandwidth_percent, 2),
             "theoretical_bandwidth_gbps": self.theoretical_bandwidth_gbps,
             "duration": round(self.duration, 2),
-            "error_message": self.error_message
+            "error_message": self.error_message,
+            "test_command": self.test_command,
+            "device_type": self.device_type
         }
 
 
@@ -161,6 +165,10 @@ class IBWriteBWTester:
                     f"ib_write_bw -d {client_device} -R -F -s {config.size} "
                     f"-D {config.duration} -p {port} {server_host}"
                 )
+
+            # 记录测试命令和设备类型
+            result.test_command = client_cmd
+            result.device_type = device_type
 
             logger.debug(f"[{server_host}] 启动服务器: {server_cmd}")
             logger.debug(f"[{client_host}] 启动客户端: {client_cmd}")

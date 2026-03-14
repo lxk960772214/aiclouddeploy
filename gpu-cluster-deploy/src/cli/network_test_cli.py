@@ -199,18 +199,165 @@ def format_output(result: dict, output_format: str) -> str:
         lines.append("=" * 70)
         lines.append("")
 
-        # 摘要
         test_report = result.get('test_report', {})
         summary = test_report.get('summary', {})
 
-        lines.append("## 测试摘要")
+        # 测试配置
+        lines.append("## 测试配置")
+        lines.append(f"  网络类型: {test_report.get('network_type', 'compute')}")
+        lines.append(f"  设备类型: {test_report.get('device_type', 'RoCE')} (自动检测)")
+        lines.append(f"  理论带宽: {test_report.get('theoretical_bandwidth_gbps', 400)} Gbps")
+
+        test_config = test_report.get('test_config', {})
+        if test_config:
+            lines.append(f"  测试参数: duration={test_config.get('duration', 10)}s, "
+                        f"size={test_config.get('size', 65536)}, "
+                        f"min_bandwidth={test_config.get('min_bandwidth_percent', 90)}%")
+        lines.append("")
+
+        # Ping连通性测试 (仅RoCE网络)
+        ping_report = result.get('ping_report', {})
+        if ping_report and ping_report.get('results'):
+            lines.append("## Ping 连通性测试 (RoCE IP层 - 所有网卡互相ping)")
+
+            # 按主机对分组结果
+            host_pairs = {}
+            for ping_result in ping_report.get('results', []):
+                # 创建主机对的唯一键（排序以避免重复）
+                hosts = sorted([ping_result.get('source_host', ''), ping_result.get('target_host', '')])
+                pair_key = f"{hosts[0]} <-> {hosts[1]}"
+                if pair_key not in host_pairs:
+                    host_pairs[pair_key] = []
+                host_pairs[pair_key].append(ping_result)
+
+            # 输出每个主机对的结果
+            for pair_key, ping_results in sorted(host_pairs.items()):
+                lines.append(f"  主机对: {pair_key}")
+
+                for pr in ping_results:
+                    if pr.get('success'):
+                        status = "✓"
+                        detail = f"{pr.get('packet_loss', 0):.0f}% loss, {pr.get('avg_latency_ms', 0):.1f}ms"
+                    else:
+                        status = "✗"
+                        detail = pr.get('error_message', '') or f"{pr.get('packet_loss', 100):.0f}% loss"
+
+                    lines.append(
+                        f"    {pr.get('source_host', '')}:{pr.get('source_interface', '')} -> "
+                        f"{pr.get('target_host', '')}:{pr.get('target_interface', '')} ({pr.get('target_ip', '')}): "
+                        f"{status} {detail}"
+                    )
+
+            lines.append(f"  Ping 测试结果: {ping_report.get('passed_tests', 0)} 通过 / {ping_report.get('failed_tests', 0)} 失败")
+            lines.append("")
+
+        # ib_write_bw 带宽测试摘要
+        lines.append("## ib_write_bw 带宽测试摘要")
         lines.append(f"  总主机数: {summary.get('total_hosts', 0)}")
         lines.append(f"  总设备数: {summary.get('total_devices', 0)}")
         lines.append(f"  正常设备: {summary.get('normal_devices', 0)}")
         lines.append(f"  疑似设备: {summary.get('suspected_devices', 0)}")
         lines.append(f"  异常设备: {summary.get('abnormal_devices', 0)}")
-        lines.append(f"  执行轮次: {summary.get('rounds_executed', 0)}")
         lines.append("")
+
+        # 异常设备详情 (完整错误信息，无截断)
+        abnormal_list = summary.get('abnormal_device_list', [])
+        suspected_list = summary.get('suspected_device_list', [])
+        device_stats = test_report.get('device_stats', {})
+
+        if abnormal_list or suspected_list:
+            lines.append("## 异常设备详情")
+
+            for device in abnormal_list:
+                parts = device.split(':')
+                if len(parts) == 2:
+                    hostname, dev = parts
+                    stats = device_stats.get(hostname, {}).get(dev, {})
+                    lines.append(f"  ✗ {device} - 两轮测试均失败")
+                    for detail in stats.get('error_details', []):
+                        lines.append(f"    {detail}")
+                    lines.append("")
+
+            for device in suspected_list:
+                parts = device.split(':')
+                if len(parts) == 2:
+                    hostname, dev = parts
+                    stats = device_stats.get(hostname, {}).get(dev, {})
+                    lines.append(f"  ? {device} - 部分测试失败")
+                    for detail in stats.get('error_details', []):
+                        lines.append(f"    {detail}")
+                    lines.append("")
+
+        # 测试详情 (每对设备的带宽结果)
+        lines.append("## 测试详情 (每对设备的带宽结果)")
+
+        for phase_key in ['round1', 'round2', 'round3']:
+            phase_result = test_report.get(phase_key, {})
+            if not phase_result:
+                continue
+
+            phase_name = {
+                'round1': '第一轮 (相邻配对)',
+                'round2': '第二轮 (错位配对)',
+                'round3': '第三轮 (异常定位)'
+            }.get(phase_key, phase_key)
+
+            # 获取配对信息
+            pairs = phase_result.get('pairs', [])
+            pair_desc = ""
+            if pairs:
+                first_pair = pairs[0]
+                pair_desc = f"{first_pair.get('server_host', '')}-{first_pair.get('client_host', '')}"
+
+            lines.append(f"  {phase_name}" + (f": {pair_desc}" if pair_desc else "") + ":")
+
+            for item in phase_result.get('results', []):
+                test_result = item.get('result', {})
+                pair = item.get('pair', {})
+
+                server_host = pair.get('server_host', '')
+                client_host = pair.get('client_host', '')
+                server_device = pair.get('server_device', '')
+                client_device = pair.get('client_device', '')
+
+                success = test_result.get('success', False)
+                bandwidth = test_result.get('bandwidth_gbps', 0)
+                bandwidth_percent = test_result.get('bandwidth_percent', 0)
+                error_msg = test_result.get('error_message', '')
+
+                if success:
+                    lines.append(f"    {server_host}:{server_device} <-> {client_host}:{client_device}: "
+                               f"{bandwidth:.1f} Gbps ({bandwidth_percent:.1f}%) ✓")
+                else:
+                    if bandwidth > 0:
+                        lines.append(f"    {server_host}:{server_device} <-> {client_host}:{client_device}: "
+                                   f"带宽 {bandwidth:.1f} Gbps ({bandwidth_percent:.1f}%) 低于阈值 ✗")
+                    else:
+                        lines.append(f"    {server_host}:{server_device} <-> {client_host}:{client_device}: "
+                                   f"失败 - {error_msg} ✗")
+
+            lines.append("")
+
+        # 设备状态详情表 (带测试次数和失败次数)
+        final_status = test_report.get('final_status', {})
+        if final_status:
+            lines.append("## 设备状态详情")
+            lines.append(f"  {'主机':<12} {'设备':<10} {'状态':<8} {'测试次数':<8} {'失败次数'}")
+            lines.append("  " + "-" * 55)
+
+            for hostname, devices in sorted(final_status.items()):
+                for device, status in sorted(devices.items()):
+                    stats = device_stats.get(hostname, {}).get(device, {})
+                    test_count = stats.get('test_count', 0)
+                    fail_count = stats.get('fail_count', 0)
+
+                    status_str = "✓ 正常" if status == "normal" else \
+                                "✗ 异常" if status == "abnormal" else \
+                                "? 疑似" if status == "suspected" else \
+                                "- 未知"
+                    lines.append(f"  {hostname:<12} {device:<10} {status_str:<8} {test_count:<8} {fail_count}")
+
+            lines.append("")
 
         # 结果状态
         if result.get('success'):
@@ -218,99 +365,6 @@ def format_output(result: dict, output_format: str) -> str:
         else:
             lines.append("测试结果: ✗ 失败")
         lines.append("")
-
-        # 异常设备
-        abnormal_list = summary.get('abnormal_device_list', [])
-        if abnormal_list:
-            lines.append("## 异常设备列表 (确定有问题)")
-            for device in abnormal_list:
-                lines.append(f"  ✗ {device}")
-            lines.append("")
-
-        # 疑似设备
-        suspected_list = summary.get('suspected_device_list', [])
-        if suspected_list:
-            lines.append("## 疑似设备列表 (需要关注)")
-            for device in suspected_list:
-                lines.append(f"  ? {device}")
-            lines.append("")
-
-        # 收集错误详情
-        error_details = {}  # {(host, device): [error_messages]}
-        for phase_key in ['round1', 'round2', 'round3']:
-            phase_result = test_report.get(phase_key, {})
-            if not phase_result:
-                continue
-
-            phase_name = {
-                'round1': '第一轮',
-                'round2': '第二轮',
-                'round3': '第三轮'
-            }.get(phase_key, phase_key)
-
-            for item in phase_result.get('results', []):
-                test_result = item.get('result', {})
-                pair = item.get('pair', {})
-
-                if not test_result.get('success', False):
-                    server_host = pair.get('server_host', '')
-                    client_host = pair.get('client_host', '')
-                    server_device = pair.get('server_device', '')
-                    client_device = pair.get('client_device', '')
-                    error_msg = test_result.get('error_message', '未知错误')
-                    bandwidth = test_result.get('bandwidth_gbps', 0)
-                    bandwidth_percent = test_result.get('bandwidth_percent', 0)
-
-                    # 构建错误信息
-                    if bandwidth > 0:
-                        detail = f"带宽 {bandwidth:.1f}Gbps ({bandwidth_percent:.0f}%)"
-                    else:
-                        detail = error_msg if error_msg else "测试失败"
-
-                    # 记录服务器端设备错误
-                    key_s = (server_host, server_device)
-                    if key_s not in error_details:
-                        error_details[key_s] = []
-                    error_details[key_s].append(f"[{phase_name}] 与 {client_host}:{client_device} 测试 - {detail}")
-
-                    # 记录客户端设备错误
-                    key_c = (client_host, client_device)
-                    if key_c not in error_details:
-                        error_details[key_c] = []
-                    error_details[key_c].append(f"[{phase_name}] 与 {server_host}:{server_device} 测试 - {detail}")
-
-        # 错误详情
-        if error_details:
-            lines.append("## 错误详情")
-            lines.append(f"{'主机':<15} {'设备':<12} {'错误信息'}")
-            lines.append("-" * 90)
-            for (host, device), errors in sorted(error_details.items()):
-                # 显示第一条错误，如果有多条则显示数量
-                first_error = errors[0] if len(errors[0]) <= 80 else errors[0][:77] + "..."
-                lines.append(f"{host:<15} {device:<12} {first_error}")
-                if len(errors) > 1:
-                    for err in errors[1:3]:  # 最多显示3条
-                        err_short = err if len(err) <= 80 else err[:77] + "..."
-                        lines.append(f"{'':<15} {'':<12}   {err_short}")
-                    if len(errors) > 3:
-                        lines.append(f"{'':<15} {'':<12}   ... 还有 {len(errors)-3} 条错误")
-            lines.append("")
-
-        # 设备状态详情
-        final_status = test_report.get('final_status', {})
-        if final_status:
-            lines.append("## 设备状态详情")
-            lines.append(f"{'主机':<15} {'设备':<12} {'状态':<10}")
-            lines.append("-" * 45)
-
-            for hostname, devices in sorted(final_status.items()):
-                for device, status in sorted(devices.items()):
-                    status_str = "✓ 正常" if status == "normal" else \
-                                "✗ 异常" if status == "abnormal" else \
-                                "? 疑似" if status == "suspected" else \
-                                "- 未知"
-                    lines.append(f"{hostname:<15} {device:<12} {status_str:<10}")
-            lines.append("")
 
         return "\n".join(lines)
 

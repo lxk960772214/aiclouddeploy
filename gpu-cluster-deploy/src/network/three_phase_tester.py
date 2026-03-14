@@ -87,6 +87,23 @@ class PhaseResult:
 
 
 @dataclass
+class DeviceTestStats:
+    """设备测试统计"""
+    status: DeviceStatus = DeviceStatus.UNKNOWN
+    test_count: int = 0
+    fail_count: int = 0
+    error_details: List[str] = field(default_factory=list)
+
+    def to_dict(self) -> Dict:
+        return {
+            "status": self.status.value if isinstance(self.status, DeviceStatus) else str(self.status),
+            "test_count": self.test_count,
+            "fail_count": self.fail_count,
+            "error_details": self.error_details
+        }
+
+
+@dataclass
 class ThreePhaseReport:
     """三轮测试报告"""
     hosts: List[HostDevices] = field(default_factory=list)
@@ -94,7 +111,12 @@ class ThreePhaseReport:
     round2: Optional[PhaseResult] = None
     round3: Optional[PhaseResult] = None
     final_status: Dict[str, Dict[str, DeviceStatus]] = field(default_factory=dict)
+    device_stats: Dict[str, Dict[str, DeviceTestStats]] = field(default_factory=dict)
     summary: Dict = field(default_factory=dict)
+    network_type: str = "compute"
+    device_type: str = "RoCE"
+    theoretical_bandwidth_gbps: float = 400.0
+    test_config: Dict = field(default_factory=dict)
 
     def to_dict(self) -> Dict:
         return {
@@ -106,7 +128,15 @@ class ThreePhaseReport:
                 host: {dev: status.value if isinstance(status, DeviceStatus) else str(status) for dev, status in devices.items()}
                 for host, devices in self.final_status.items()
             },
-            "summary": self.summary
+            "device_stats": {
+                host: {dev: stats.to_dict() for dev, stats in devices.items()}
+                for host, devices in self.device_stats.items()
+            },
+            "summary": self.summary,
+            "network_type": self.network_type,
+            "device_type": self.device_type,
+            "theoretical_bandwidth_gbps": self.theoretical_bandwidth_gbps,
+            "test_config": self.test_config
         }
 
 
@@ -330,7 +360,8 @@ class ThreePhaseTester:
     def execute(self, hosts_info: List[Dict],
                 test_config: Optional[Dict] = None,
                 max_workers: int = 4,
-                skip_round2_if_all_normal: bool = True) -> ThreePhaseReport:
+                skip_round2_if_all_normal: bool = True,
+                network_type: str = "compute") -> ThreePhaseReport:
         """
         执行三轮测试
 
@@ -339,6 +370,7 @@ class ThreePhaseTester:
             test_config: 测试配置
             max_workers: 最大并发数
             skip_round2_if_all_normal: 如果第一轮全部正常是否跳过后续轮次
+            network_type: 网络类型 (compute/storage)
 
         Returns:
             ThreePhaseReport测试报告
@@ -353,7 +385,20 @@ class ThreePhaseTester:
             for h in hosts_info
         ]
 
-        report = ThreePhaseReport(hosts=hosts)
+        # 检测设备类型
+        device_type = self._detect_device_type(hosts_info)
+
+        # 初始化测试配置
+        if test_config is None:
+            test_config = {}
+
+        report = ThreePhaseReport(
+            hosts=hosts,
+            network_type=network_type,
+            device_type=device_type,
+            theoretical_bandwidth_gbps=test_config.get("theoretical_bandwidth_gbps", 400.0),
+            test_config=test_config
+        )
 
         if len(hosts) < 2:
             report.summary = {"error": "至少需要2台主机进行测试"}
@@ -427,9 +472,116 @@ class ThreePhaseTester:
 
         # 生成最终状态
         report.final_status = self._determine_final_status(report, hosts)
+        # 生成设备统计信息
+        report.device_stats = self._generate_device_stats(report, hosts)
+
+        # 生成最终状态
+        report.final_status = self._determine_final_status(report, hosts)
         report.summary = self._generate_summary(report)
 
         return report
+
+    def _detect_device_type(self, hosts_info: List[Dict]) -> str:
+        """
+        检测设备类型 (RoCE/InfiniBand)
+
+        Args:
+            hosts_info: 主机信息列表
+
+        Returns:
+            设备类型字符串
+        """
+        if not self.rdma_detector or not hosts_info:
+            return "RoCE"  # 默认
+
+        try:
+            # 从第一个主机检测
+            first_host = hosts_info[0].get("hostname", "")
+            devices = hosts_info[0].get("devices", [])
+
+            if first_host and devices:
+                info = self.rdma_detector.detect_device_type(first_host, devices[0])
+                device_type = str(info.device_type)
+                if "infiniband" in device_type.lower():
+                    return "InfiniBand"
+                elif "roce" in device_type.lower():
+                    return "RoCE"
+
+        except Exception as e:
+            logger.debug(f"检测设备类型失败: {e}")
+
+        return "RoCE"
+
+    def _generate_device_stats(self, report: ThreePhaseReport,
+                               hosts: List[HostDevices]) -> Dict[str, Dict[str, DeviceTestStats]]:
+        """
+        生成设备测试统计
+
+        Args:
+            report: 测试报告
+            hosts: 主机列表
+
+        Returns:
+            设备统计字典
+        """
+        device_stats = {}
+
+        # 初始化所有设备统计
+        for host in hosts:
+            device_stats[host.hostname] = {}
+            for device in host.devices:
+                device_stats[host.hostname][device] = DeviceTestStats()
+
+        # 收集每轮测试结果
+        for phase_result in [report.round1, report.round2, report.round3]:
+            if not phase_result:
+                continue
+
+            phase_name = {
+                TestPhase.ROUND_1: "第一轮",
+                TestPhase.ROUND_2: "第二轮",
+                TestPhase.ROUND_3: "第三轮"
+            }.get(phase_result.phase, "未知")
+
+            for item in phase_result.results:
+                result = item.get("result", {})
+                pair = item.get("pair", {})
+
+                server_host = pair.get("server_host", "")
+                server_device = pair.get("server_device", "")
+                client_host = pair.get("client_host", "")
+                client_device = pair.get("client_device", "")
+
+                success = result.get("success", False)
+                bandwidth = result.get("bandwidth_gbps", 0)
+                bandwidth_percent = result.get("bandwidth_percent", 0)
+                error_msg = result.get("error_message", "")
+
+                # 更新服务器端设备统计
+                if server_host in device_stats and server_device in device_stats[server_host]:
+                    stats = device_stats[server_host][server_device]
+                    stats.test_count += 1
+                    if not success:
+                        stats.fail_count += 1
+                        if bandwidth > 0:
+                            detail = f"[{phase_name}] {server_device} <-> {client_host}:{client_device}: 带宽 {bandwidth:.1f} Gbps ({bandwidth_percent:.0f}%) 低于阈值"
+                        else:
+                            detail = f"[{phase_name}] {server_device} <-> {client_host}:{client_device}: {error_msg}"
+                        stats.error_details.append(detail)
+
+                # 更新客户端设备统计
+                if client_host in device_stats and client_device in device_stats[client_host]:
+                    stats = device_stats[client_host][client_device]
+                    stats.test_count += 1
+                    if not success:
+                        stats.fail_count += 1
+                        if bandwidth > 0:
+                            detail = f"[{phase_name}] {client_device} <-> {server_host}:{server_device}: 带宽 {bandwidth:.1f} Gbps ({bandwidth_percent:.0f}%) 低于阈值"
+                        else:
+                            detail = f"[{phase_name}] {client_device} <-> {server_host}:{server_device}: {error_msg}"
+                        stats.error_details.append(detail)
+
+        return device_stats
 
     def _determine_final_status(self, report: ThreePhaseReport,
                                  hosts: List[HostDevices]) -> Dict[str, Dict[str, DeviceStatus]]:
@@ -566,94 +718,123 @@ class ThreePhaseTester:
             Markdown格式字符串
         """
         lines = [
-            "# 网络测试报告\n",
-            f"## 测试摘要\n",
+            "# RDMA网络测试报告\n",
+            "## 测试配置\n",
+            f"- 网络类型: {report.network_type}",
+            f"- 设备类型: {report.device_type} (自动检测)",
+            f"- 理论带宽: {report.theoretical_bandwidth_gbps} Gbps",
+        ]
+
+        # 测试参数
+        test_config = report.test_config or {}
+        lines.append(f"- 测试参数: duration={test_config.get('duration', 10)}s, "
+                    f"size={test_config.get('size', 65536)}, "
+                    f"min_bandwidth={test_config.get('min_bandwidth_percent', 90)}%")
+        lines.append("")
+
+        # 测试摘要
+        lines.extend([
+            "## ib_write_bw 带宽测试摘要\n",
             f"- 总主机数: {report.summary.get('total_hosts', 0)}",
             f"- 总设备数: {report.summary.get('total_devices', 0)}",
-            f"- 正常主机: {report.summary.get('normal_hosts', 0)}",
-            f"- 异常主机: {report.summary.get('abnormal_hosts', 0)}",
             f"- 正常设备: {report.summary.get('normal_devices', 0)}",
             f"- 疑似设备: {report.summary.get('suspected_devices', 0)}",
             f"- 异常设备: {report.summary.get('abnormal_devices', 0)}",
             f"- 执行轮次: {report.summary.get('rounds_executed', 0)}",
             "",
-        ]
+        ])
 
-        # 异常设备列表
-        if report.summary.get('abnormal_devices', 0) > 0:
-            lines.append("## 异常设备列表\n")
+        # 异常设备详情
+        if report.summary.get('abnormal_devices', 0) > 0 or report.summary.get('suspected_devices', 0) > 0:
+            lines.append("## 异常设备详情\n")
+
             for device in report.summary.get('abnormal_device_list', []):
-                lines.append(f"- **{device}**")
-            lines.append("")
+                parts = device.split(':')
+                if len(parts) == 2:
+                    hostname, dev = parts
+                    stats = report.device_stats.get(hostname, {}).get(dev)
+                    if stats:
+                        lines.append(f"✗ **{device}** - 两轮测试均失败")
+                        for detail in stats.error_details:
+                            lines.append(f"  {detail}")
+                        lines.append("")
 
-        # 疑似设备列表
-        if report.summary.get('suspected_devices', 0) > 0:
-            lines.append("## 疑似设备列表\n")
             for device in report.summary.get('suspected_device_list', []):
-                lines.append(f"- {device}")
-            lines.append("")
+                parts = device.split(':')
+                if len(parts) == 2:
+                    hostname, dev = parts
+                    stats = report.device_stats.get(hostname, {}).get(dev)
+                    if stats:
+                        lines.append(f"? **{device}** - 部分测试失败")
+                        for detail in stats.error_details:
+                            lines.append(f"  {detail}")
+                        lines.append("")
 
-        # 测试详情
-        lines.append("## 测试详情\n")
+        # 测试详情 - 每对设备的带宽结果
+        lines.append("## 测试详情 (每对设备的带宽结果)\n")
 
-        # 收集所有测试结果中的错误信息
-        error_details = {}  # {(host, device): [error_messages]}
-
-        for phase_result in [report.round1, report.round2, report.round3]:
+        for phase_result, phase_key in [(report.round1, "round1"), (report.round2, "round2"), (report.round3, "round3")]:
             if not phase_result:
                 continue
+
             phase_name = {
-                TestPhase.ROUND_1: "第一轮",
-                TestPhase.ROUND_2: "第二轮",
-                TestPhase.ROUND_3: "第三轮"
+                TestPhase.ROUND_1: "第一轮 (相邻配对)",
+                TestPhase.ROUND_2: "第二轮 (错位配对)",
+                TestPhase.ROUND_3: "第三轮 (异常定位)"
             }.get(phase_result.phase, "未知")
+
+            # 提取配对描述
+            pair_desc = ""
+            if phase_result.pairs:
+                first_pair = phase_result.pairs[0]
+                if phase_key == "round1":
+                    pair_desc = f"{first_pair.server_host}-{first_pair.client_host}"
+                elif phase_key == "round2":
+                    pair_desc = f"{first_pair.server_host}-{first_pair.client_host}"
+
+            lines.append(f"**{phase_name}**" + (f": {pair_desc}" if pair_desc else "") + ":\n")
 
             for item in phase_result.results:
                 result = item.get("result", {})
                 pair = item.get("pair", {})
 
-                if not result.get("success", False):
-                    server_host = pair.get("server_host", "")
-                    client_host = pair.get("client_host", "")
-                    server_device = pair.get("server_device", "")
-                    client_device = pair.get("client_device", "")
-                    error_msg = result.get("error_message", "未知错误")
-                    bandwidth = result.get("bandwidth_gbps", 0)
+                server_host = pair.get("server_host", "")
+                client_host = pair.get("client_host", "")
+                server_device = pair.get("server_device", "")
+                client_device = pair.get("client_device", "")
+                success = result.get("success", False)
+                bandwidth = result.get("bandwidth_gbps", 0)
+                bandwidth_percent = result.get("bandwidth_percent", 0)
+                error_msg = result.get("error_message", "")
 
-                    # 记录服务器端设备错误
-                    key_s = (server_host, server_device)
-                    if key_s not in error_details:
-                        error_details[key_s] = []
-                    error_details[key_s].append(f"[{phase_name}] {client_host}:{client_device} -> 带宽:{bandwidth}Gbps - {error_msg}")
+                if success:
+                    lines.append(f"  {server_host}:{server_device} <-> {client_host}:{client_device}: "
+                               f"{bandwidth:.1f} Gbps ({bandwidth_percent:.1f}%) ✓")
+                else:
+                    if bandwidth > 0:
+                        lines.append(f"  {server_host}:{server_device} <-> {client_host}:{client_device}: "
+                                   f"带宽 {bandwidth:.1f} Gbps ({bandwidth_percent:.1f}%) 低于阈值 ✗")
+                    else:
+                        lines.append(f"  {server_host}:{server_device} <-> {client_host}:{client_device}: "
+                                   f"失败 - {error_msg} ✗")
 
-                    # 记录客户端设备错误
-                    key_c = (client_host, client_device)
-                    if key_c not in error_details:
-                        error_details[key_c] = []
-                    error_details[key_c].append(f"[{phase_name}] {server_host}:{server_device} <- 带宽:{bandwidth}Gbps - {error_msg}")
-
-        if error_details:
-            lines.append("### 错误详情\n")
-            lines.append("| 主机 | 设备 | 错误信息 |")
-            lines.append("|------|------|----------|")
-            for (host, device), errors in sorted(error_details.items()):
-                error_str = "<br>".join(errors[:3])  # 最多显示3条
-                if len(errors) > 3:
-                    error_str += f"<br>...还有{len(errors)-3}条"
-                lines.append(f"| {host} | {device} | {error_str} |")
             lines.append("")
 
-        # 设备状态详情
+        # 设备状态详情表
         lines.append("## 设备状态详情\n")
-        lines.append("| 主机 | 设备 | 状态 |")
-        lines.append("|------|------|------|")
+        lines.append("| 主机 | 设备 | 状态 | 测试次数 | 失败次数 |")
+        lines.append("|------|------|------|----------|----------|")
 
         for hostname, devices in sorted(report.final_status.items()):
             for device, status in sorted(devices.items()):
+                stats = report.device_stats.get(hostname, {}).get(device)
+                test_count = stats.test_count if stats else 0
+                fail_count = stats.fail_count if stats else 0
+
                 status_str = "✓ 正常" if status == DeviceStatus.NORMAL else \
                             "✗ 异常" if status == DeviceStatus.ABNORMAL else \
                             "? 疑似" if status == DeviceStatus.SUSPECTED else \
                             "- 未知"
-                lines.append(f"| {hostname} | {device} | {status_str} |")
+                lines.append(f"| {hostname} | {device} | {status_str} | {test_count} | {fail_count} |")
 
         return "\n".join(lines)

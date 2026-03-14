@@ -12,6 +12,7 @@
 # - IBWriteBWTester: ib_write_bw性能测试器
 # - ThreePhaseTester: 三轮测试策略
 # - DeploymentVerifier: 部署验证检查器
+# - RoCEPingTester: RoCE网络Ping连通性测试器
 
 from .connectivity_checker import (
     ConnectivityChecker,
@@ -36,6 +37,11 @@ from .deployment_verifier import (
     CheckStatus,
     CheckCategory
 )
+from .roce_ping_tester import (
+    RoCEPingTester,
+    PingResult,
+    PingTestReport
+)
 
 __all__ = [
     'ConnectivityChecker',
@@ -58,4 +64,7 @@ __all__ = [
     'DeploymentVerificationReport',
     'CheckStatus',
     'CheckCategory',
+    'RoCEPingTester',
+    'PingResult',
+    'PingTestReport',
 ]
