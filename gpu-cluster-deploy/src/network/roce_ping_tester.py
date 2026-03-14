@@ -168,7 +168,7 @@ class RoCEPingTester:
 
     def ping_test(self, source_host: str, source_interface: str,
                   target_host: str, target_ip: str,
-                  count: int = 3, timeout: int = 10) -> PingResult:
+                  count: int = 1, deadline: int = 3) -> PingResult:
         """
         执行单个ping测试
 
@@ -177,8 +177,8 @@ class RoCEPingTester:
             source_interface: 源网卡
             target_host: 目标主机名
             target_ip: 目标IP
-            count: ping次数
-            timeout: 超时时间
+            count: ping次数 (默认1次)
+            deadline: 总超时时间(秒)，无论发多少包都会在此时停止 (默认3秒)
 
         Returns:
             PingResult对象
@@ -205,11 +205,16 @@ class RoCEPingTester:
 
         try:
             # 执行ping命令，指定源接口
-            cmd = f"ping -I {source_interface} -c {count} -W {timeout} {target_ip}"
+            # -I: 指定源接口
+            # -c: 发送的包数量
+            # -W: 等待每个响应的超时时间(秒)
+            # -w: 总超时时间(秒)，到时间就停止
+            cmd = f"ping -I {source_interface} -c {count} -W 1 -w {deadline} {target_ip}"
             logger.debug(f"[{source_host}] 执行: {cmd}")
 
+            # SSH 命令超时: deadline + 5秒缓冲
             exec_result = self.ssh_manager.execute_on_host(
-                source_host, cmd, timeout=timeout + 10
+                source_host, cmd, timeout=deadline + 5
             )
 
             if not exec_result.success:
