@@ -149,6 +149,7 @@ class IBWriteBWTester:
 
             # 构建命令
             if device_type == "infiniband":
+                # InfiniBand 模式
                 server_cmd = (
                     f"ib_write_bw -d {server_device} -F -s {config.size} "
                     f"-D {config.duration} -p {port}"
@@ -157,13 +158,16 @@ class IBWriteBWTester:
                     f"ib_write_bw -d {client_device} -F -s {config.size} "
                     f"-D {config.duration} -p {port} {server_host}"
                 )
-            else:  # RoCE
+            else:
+                # RoCE 模式 - 使用 -x 3 指定 GID index
+                # -x 3 是 RoCEv2 的标准 GID index
+                # 不使用 -R 参数，直接使用以太网链路层
                 server_cmd = (
-                    f"ib_write_bw -d {server_device} -R -F -s {config.size} "
+                    f"ib_write_bw -d {server_device} -x 3 -F -s {config.size} "
                     f"-D {config.duration} -p {port}"
                 )
                 client_cmd = (
-                    f"ib_write_bw -d {client_device} -R -F -s {config.size} "
+                    f"ib_write_bw -d {client_device} -x 3 -F -s {config.size} "
                     f"-D {config.duration} -p {port} {server_host}"
                 )
 
