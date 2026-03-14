@@ -327,42 +327,101 @@ class IBWriteBWTester:
         """
         并发测试多对主机
 
+        注意：为了避免资源竞争，同一台主机不会同时参与多个测试。
+        测试会按组执行，每组中的主机互不重叠。
+
         Args:
             test_pairs: 测试对列表 [(server_host, client_host, server_device, client_device), ...]
             config: 测试配置
-            max_workers: 最大并发数
+            max_workers: 最大并发数（用于不同主机组的并发）
 
         Returns:
             测试结果列表
         """
         results = []
 
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = {
-                executor.submit(
-                    self.test_bandwidth, server, client, sdev, cdev, config
-                ): (server, client, sdev, cdev)
-                for server, client, sdev, cdev in test_pairs
-            }
+        # 将测试对分组，确保同一组内主机不重叠
+        test_groups = self._group_non_overlapping_tests(test_pairs)
 
-            for future in as_completed(futures):
-                try:
-                    result = future.result()
-                    results.append(result)
-                except Exception as e:
-                    pair = futures[future]
-                    logger.error(f"并发测试失败 {pair}: {e}")
-                    results.append(BandwidthTestResult(
-                        success=False,
-                        server_host=pair[0],
-                        client_host=pair[1],
-                        server_device=pair[2],
-                        client_device=pair[3],
-                        port=0,
-                        error_message=str(e)
-                    ))
+        logger.info(f"将 {len(test_pairs)} 个测试分为 {len(test_groups)} 组执行（避免主机资源竞争）")
+
+        for group_idx, group in enumerate(test_groups):
+            logger.debug(f"执行第 {group_idx + 1}/{len(test_groups)} 组测试，共 {len(group)} 个")
+
+            # 同一组内的测试可以并发执行（因为主机不重叠）
+            with ThreadPoolExecutor(max_workers=min(max_workers, len(group))) as executor:
+                futures = {
+                    executor.submit(
+                        self.test_bandwidth, server, client, sdev, cdev, config
+                    ): (server, client, sdev, cdev)
+                    for server, client, sdev, cdev in group
+                }
+
+                group_results = {}
+                for future in as_completed(futures):
+                    try:
+                        result = future.result()
+                        pair = futures[future]
+                        group_results[pair] = result
+                    except Exception as e:
+                        pair = futures[future]
+                        logger.error(f"测试 {pair} 异常: {e}")
+                        group_results[pair] = BandwidthTestResult(
+                            success=False,
+                            server_host=pair[0],
+                            client_host=pair[1],
+                            server_device=pair[2],
+                            client_device=pair[3],
+                            port=0,
+                            error_message=str(e)
+                        )
+
+                # 按原始顺序添加结果
+                for pair in group:
+                    results.append(group_results.get(pair))
 
         return results
+
+    def _group_non_overlapping_tests(self, test_pairs: List[Tuple[str, str, str, str]]) -> List[List[Tuple[str, str, str, str]]]:
+        """
+        将测试对分组，确保同一组内主机不重叠
+
+        这样可以避免同一台主机同时参与多个测试，防止资源竞争
+
+        Args:
+            test_pairs: 测试对列表
+
+        Returns:
+            分组后的测试列表
+        """
+        if not test_pairs:
+            return []
+
+        groups = []
+
+        for pair in test_pairs:
+            server_host, client_host = pair[0], pair[1]
+
+            # 查找可以添加该测试的组（组内没有使用相同主机）
+            found_group = None
+            for group in groups:
+                hosts_in_group = set()
+                for p in group:
+                    hosts_in_group.add(p[0])  # server
+                    hosts_in_group.add(p[1])  # client
+
+                # 如果该组没有使用 server_host 和 client_host，可以添加
+                if server_host not in hosts_in_group and client_host not in hosts_in_group:
+                    found_group = group
+                    break
+
+            if found_group:
+                found_group.append(pair)
+            else:
+                # 创建新组
+                groups.append([pair])
+
+        return groups
 
     def test_all_devices(self, host1: str, host2: str,
                          devices1: List[str], devices2: List[str],
