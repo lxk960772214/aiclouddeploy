@@ -1,5 +1,10 @@
 # Full GPU Cluster Deployment Execution Plan
 # This is a comprehensive plan that includes all deployment phases
+#
+# 重要说明:
+# 1. SSH免密(step_0d)必须在hosts(step_9)之前执行，因为hosts配置需要使用免密登录
+# 2. hosts配置完成后才能使用pdsh批量执行
+# 3. step_0-0d 使用登录用户，后续步骤使用部署用户
 
 name: full-gpu-cluster-deployment
 version: "1.0.0"
@@ -14,11 +19,26 @@ global_config:
   timeout_multiplier: 1.0
 
 # Module groups for organized execution
+# 分组顺序与 ALL_STEPS 一致
 groups:
-  - name: system-checks
-    description: "Initial system validation and dependency installation"
+  - name: phase0-device-check
+    description: "Phase 0: Device consistency check (uses login user)"
     modules:
       - device-check
+    parallel: false
+    stop_on_failure: true
+
+  - name: phase1-init
+    description: "Phase 1: SSH key setup and hosts configuration (enables pdsh batch execution)"
+    modules:
+      - ssh-key-setup
+      - hostname-hosts
+    parallel: false
+    stop_on_failure: true
+
+  - name: phase2-system-checks
+    description: "Phase 2: System validation and dependency installation (pdsh mode)"
+    modules:
       - dependencies
       - kernel-check
       - glibc-check
@@ -26,29 +46,27 @@ groups:
     parallel: false
     stop_on_failure: true
 
-  - name: base-config
-    description: "Base system configuration"
+  - name: phase3-base-config
+    description: "Phase 3: Base system configuration"
     modules:
       - sudo-nopasswd
       - disk-mount
       - msr-settings
       - rc-local
-      - hostname-hosts
     parallel: false
     stop_on_failure: true
 
-  - name: security
-    description: "Security and user configuration"
+  - name: phase4-security
+    description: "Phase 4: Security and user configuration"
     modules:
       - create-user
-      - ssh-key-setup
       - cpu-performance
       - file-limits
     parallel: false
     stop_on_failure: true
 
-  - name: system-optimization
-    description: "System optimization and tuning"
+  - name: phase5-system-optimization
+    description: "Phase 5: System optimization and tuning"
     modules:
       - disable-autoupdate
       - lock-kernel
@@ -58,8 +76,8 @@ groups:
     parallel: false
     stop_on_failure: true
 
-  - name: network-drivers
-    description: "Network and RDMA driver installation"
+  - name: phase6-network-drivers
+    description: "Phase 6: Network and RDMA driver installation"
     modules:
       - mellanox-driver
       - disable-nouveau
@@ -68,8 +86,8 @@ groups:
     parallel: false
     stop_on_failure: true
 
-  - name: gpu-environment
-    description: "GPU environment setup"
+  - name: phase7-gpu-environment
+    description: "Phase 7: GPU environment setup"
     modules:
       - cuda-toolkit
       - nccl-install
@@ -79,8 +97,8 @@ groups:
     parallel: false
     stop_on_failure: true
 
-  - name: advanced-config
-    description: "Advanced configuration"
+  - name: phase8-advanced-config
+    description: "Phase 8: Advanced configuration"
     modules:
       - disable-acs
       - time-sync
@@ -90,7 +108,7 @@ groups:
 
 # Individual module definitions
 modules:
-  # Phase 0: Device Check
+  # Phase 0: Device Check (使用登录用户)
   - name: device-check
     module_class: step_0
     category: system
@@ -102,14 +120,34 @@ modules:
     depends_on: []
     timeout: 600
 
-  # Phase A: System Checks
+  # Phase 1: SSH Key Setup (使用登录用户)
+  # SSH免密必须在hosts之前配置，后续步骤才能使用pdsh批量执行
+  - name: ssh-key-setup
+    module_class: step_0d
+    category: security
+    enabled: true
+    config: {}
+    depends_on:
+      - device-check
+    timeout: 180
+
+  - name: hostname-hosts
+    module_class: step_9
+    category: system
+    enabled: true
+    config: {}
+    depends_on:
+      - ssh-key-setup
+    timeout: 180
+
+  # Phase 2: System Checks (pdsh mode)
   - name: dependencies
     module_class: step_1
     category: system
     enabled: true
     config: {}
     depends_on:
-      - device-check
+      - hostname-hosts
     timeout: 600
 
   - name: kernel-check
@@ -139,7 +177,7 @@ modules:
       - dependencies
     timeout: 180
 
-  # Phase B: Base Configuration
+  # Phase 3: Base Configuration
   - name: sudo-nopasswd
     module_class: step_5
     category: security
@@ -177,32 +215,14 @@ modules:
       - sudo-nopasswd
     timeout: 180
 
-  - name: hostname-hosts
-    module_class: step_9
-    category: system
-    enabled: true
-    config: {}
-    depends_on:
-      - sudo-nopasswd
-    timeout: 180
-
-  # Phase C: Security
+  # Phase 4: Security
   - name: create-user
     module_class: step_10
     category: security
     enabled: true
     config: {}
     depends_on:
-      - hostname-hosts
-    timeout: 180
-
-  - name: ssh-key-setup
-    module_class: step_11
-    category: security
-    enabled: true
-    config: {}
-    depends_on:
-      - create-user
+      - rc-local
     timeout: 180
 
   - name: cpu-performance
@@ -211,7 +231,7 @@ modules:
     enabled: true
     config: {}
     depends_on:
-      - ssh-key-setup
+      - create-user
     timeout: 180
 
   - name: file-limits
@@ -220,10 +240,10 @@ modules:
     enabled: true
     config: {}
     depends_on:
-      - ssh-key-setup
+      - create-user
     timeout: 180
 
-  # Phase D: System Optimization
+  # Phase 5: System Optimization
   - name: disable-autoupdate
     module_class: step_15
     category: system
@@ -270,7 +290,7 @@ modules:
       - disable-autoupdate
     timeout: 180
 
-  # Phase E: Network Drivers
+  # Phase 6: Network Drivers
   - name: mellanox-driver
     module_class: step_20
     category: network
@@ -308,7 +328,7 @@ modules:
       - nvidia-driver
     timeout: 300
 
-  # Phase F: GPU Environment
+  # Phase 7: GPU Environment
   - name: cuda-toolkit
     module_class: step_24
     category: gpu
@@ -355,7 +375,7 @@ modules:
       - nvidia-driver
     timeout: 180
 
-  # Phase G: Advanced Configuration
+  # Phase 8: Advanced Configuration
   - name: disable-acs
     module_class: step_29
     category: system
@@ -399,5 +419,9 @@ metadata:
   notes: |
     This is a complete deployment plan for GPU clusters.
     It includes all phases from system checks to GPU configuration.
+
+    IMPORTANT: SSH key setup (step_0d) must run before hostname-hosts (step_9)
+    to enable pdsh batch execution for subsequent steps.
+
     Make sure to review and adjust the plan based on your specific requirements.
     Some modules are disabled by default (disable-ipv6, disable-acs) as they may not be needed.

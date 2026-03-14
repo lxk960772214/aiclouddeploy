@@ -145,7 +145,7 @@ from .step_final_verification import FinalVerification
 
 # 所有步骤类 - 按依赖顺序排列
 # 重要：
-# 1. SSH免密(step_11)和hosts(step_9)必须最先配置，后续步骤才能使用pdsh批量执行
+# 1. SSH免密(step_0d)和hosts(step_9)必须最先配置，后续步骤才能使用pdsh批量执行
 # 2. SSH免密使用IP连接，不依赖hosts
 # 3. 控制机需要预先安装pdsh
 ALL_STEPS = [

@@ -431,7 +431,7 @@ class BaseStep(ABC):
             private_key = self._get_login_private_key(host)
         else:
             # 部署用户 ≠ 登录用户，且 use_login_user=False
-            # 此时部署用户已配置免密登录（step_11 已完成），不需要密码/密钥
+            # 此时部署用户已配置免密登录（step_0d 已完成），不需要密码/密钥
             private_key = None
 
         result = self.ssh_manager.execute_on_host(
