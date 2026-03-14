@@ -194,9 +194,9 @@ def format_output(result: dict, output_format: str) -> str:
         lines = []
 
         # 标题
-        lines.append("=" * 60)
+        lines.append("=" * 70)
         lines.append("RDMA网络测试报告")
-        lines.append("=" * 60)
+        lines.append("=" * 70)
         lines.append("")
 
         # 摘要
@@ -207,6 +207,7 @@ def format_output(result: dict, output_format: str) -> str:
         lines.append(f"  总主机数: {summary.get('total_hosts', 0)}")
         lines.append(f"  总设备数: {summary.get('total_devices', 0)}")
         lines.append(f"  正常设备: {summary.get('normal_devices', 0)}")
+        lines.append(f"  疑似设备: {summary.get('suspected_devices', 0)}")
         lines.append(f"  异常设备: {summary.get('abnormal_devices', 0)}")
         lines.append(f"  执行轮次: {summary.get('rounds_executed', 0)}")
         lines.append("")
@@ -221,24 +222,94 @@ def format_output(result: dict, output_format: str) -> str:
         # 异常设备
         abnormal_list = summary.get('abnormal_device_list', [])
         if abnormal_list:
-            lines.append("## 异常设备列表")
+            lines.append("## 异常设备列表 (确定有问题)")
             for device in abnormal_list:
-                lines.append(f"  - {device}")
+                lines.append(f"  ✗ {device}")
+            lines.append("")
+
+        # 疑似设备
+        suspected_list = summary.get('suspected_device_list', [])
+        if suspected_list:
+            lines.append("## 疑似设备列表 (需要关注)")
+            for device in suspected_list:
+                lines.append(f"  ? {device}")
+            lines.append("")
+
+        # 收集错误详情
+        error_details = {}  # {(host, device): [error_messages]}
+        for phase_key in ['round1', 'round2', 'round3']:
+            phase_result = test_report.get(phase_key, {})
+            if not phase_result:
+                continue
+
+            phase_name = {
+                'round1': '第一轮',
+                'round2': '第二轮',
+                'round3': '第三轮'
+            }.get(phase_key, phase_key)
+
+            for item in phase_result.get('results', []):
+                test_result = item.get('result', {})
+                pair = item.get('pair', {})
+
+                if not test_result.get('success', False):
+                    server_host = pair.get('server_host', '')
+                    client_host = pair.get('client_host', '')
+                    server_device = pair.get('server_device', '')
+                    client_device = pair.get('client_device', '')
+                    error_msg = test_result.get('error_message', '未知错误')
+                    bandwidth = test_result.get('bandwidth_gbps', 0)
+                    bandwidth_percent = test_result.get('bandwidth_percent', 0)
+
+                    # 构建错误信息
+                    if bandwidth > 0:
+                        detail = f"带宽 {bandwidth:.1f}Gbps ({bandwidth_percent:.0f}%)"
+                    else:
+                        detail = error_msg if error_msg else "测试失败"
+
+                    # 记录服务器端设备错误
+                    key_s = (server_host, server_device)
+                    if key_s not in error_details:
+                        error_details[key_s] = []
+                    error_details[key_s].append(f"[{phase_name}] 与 {client_host}:{client_device} 测试 - {detail}")
+
+                    # 记录客户端设备错误
+                    key_c = (client_host, client_device)
+                    if key_c not in error_details:
+                        error_details[key_c] = []
+                    error_details[key_c].append(f"[{phase_name}] 与 {server_host}:{server_device} 测试 - {detail}")
+
+        # 错误详情
+        if error_details:
+            lines.append("## 错误详情")
+            lines.append(f"{'主机':<15} {'设备':<12} {'错误信息'}")
+            lines.append("-" * 90)
+            for (host, device), errors in sorted(error_details.items()):
+                # 显示第一条错误，如果有多条则显示数量
+                first_error = errors[0] if len(errors[0]) <= 80 else errors[0][:77] + "..."
+                lines.append(f"{host:<15} {device:<12} {first_error}")
+                if len(errors) > 1:
+                    for err in errors[1:3]:  # 最多显示3条
+                        err_short = err if len(err) <= 80 else err[:77] + "..."
+                        lines.append(f"{'':<15} {'':<12}   {err_short}")
+                    if len(errors) > 3:
+                        lines.append(f"{'':<15} {'':<12}   ... 还有 {len(errors)-3} 条错误")
             lines.append("")
 
         # 设备状态详情
         final_status = test_report.get('final_status', {})
         if final_status:
             lines.append("## 设备状态详情")
-            lines.append(f"{'主机':<20} {'设备':<15} {'状态':<10}")
-            lines.append("-" * 50)
+            lines.append(f"{'主机':<15} {'设备':<12} {'状态':<10}")
+            lines.append("-" * 45)
 
             for hostname, devices in sorted(final_status.items()):
                 for device, status in sorted(devices.items()):
                     status_str = "✓ 正常" if status == "normal" else \
                                 "✗ 异常" if status == "abnormal" else \
-                                "? 疑似"
-                    lines.append(f"{hostname:<20} {device:<15} {status_str:<10}")
+                                "? 疑似" if status == "suspected" else \
+                                "- 未知"
+                    lines.append(f"{hostname:<15} {device:<12} {status_str:<10}")
             lines.append("")
 
         return "\n".join(lines)

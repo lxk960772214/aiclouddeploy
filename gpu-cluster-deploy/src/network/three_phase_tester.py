@@ -103,7 +103,7 @@ class ThreePhaseReport:
             "round2": self.round2.to_dict() if self.round2 else None,
             "round3": self.round3.to_dict() if self.round3 else None,
             "final_status": {
-                host: {dev: str(status) for dev, status in devices.items()}
+                host: {dev: status.value if isinstance(status, DeviceStatus) else str(status) for dev, status in devices.items()}
                 for host, devices in self.final_status.items()
             },
             "summary": self.summary
@@ -451,36 +451,61 @@ class ThreePhaseTester:
             for device in host.devices:
                 final_status[host.hostname][device] = DeviceStatus.UNKNOWN
 
-        # 根据第一轮结果更新状态
-        if report.round1:
+        # 统计每个设备在所有轮次中失败的次数
+        device_fail_count = {}  # {hostname: {device: fail_count}}
+
+        for host in hosts:
+            device_fail_count[host.hostname] = {d: 0 for d in host.devices}
+
+        # 根据第一轮结果更新
+        if report.round1 and report.round1.abnormal_devices:
             for hostname, devices in report.round1.abnormal_devices.items():
                 for device in devices:
-                    if hostname in final_status and device in final_status[hostname]:
-                        final_status[hostname][device] = DeviceStatus.SUSPECTED
+                    if hostname in device_fail_count and device in device_fail_count[hostname]:
+                        device_fail_count[hostname][device] += 1
+                        logger.debug(f"[Round1] {hostname}:{device} fail_count = {device_fail_count[hostname][device]}")
 
-        # 根据第二轮结果更新状态
-        if report.round2:
+        # 根据第二轮结果更新
+        if report.round2 and report.round2.abnormal_devices:
             for hostname, devices in report.round2.abnormal_devices.items():
                 for device in devices:
-                    if hostname in final_status and device in final_status[hostname]:
-                        # 如果两轮都异常，标记为异常
-                        if final_status[hostname][device] == DeviceStatus.SUSPECTED:
-                            final_status[hostname][device] = DeviceStatus.ABNORMAL
-                        else:
-                            final_status[hostname][device] = DeviceStatus.SUSPECTED
+                    if hostname in device_fail_count and device in device_fail_count[hostname]:
+                        device_fail_count[hostname][device] += 1
+                        logger.debug(f"[Round2] {hostname}:{device} fail_count = {device_fail_count[hostname][device]}")
 
-        # 根据第三轮结果精确定位
-        if report.round3:
+        # 根据第三轮结果更新
+        if report.round3 and report.round3.abnormal_devices:
             for hostname, devices in report.round3.abnormal_devices.items():
                 for device in devices:
-                    if hostname in final_status and device in final_status[hostname]:
-                        final_status[hostname][device] = DeviceStatus.ABNORMAL
+                    if hostname in device_fail_count and device in device_fail_count[hostname]:
+                        device_fail_count[hostname][device] += 1
+                        logger.debug(f"[Round3] {hostname}:{device} fail_count = {device_fail_count[hostname][device]}")
 
-        # 标记正常设备
-        for hostname, devices in final_status.items():
-            for device, status in devices.items():
-                if status == DeviceStatus.UNKNOWN:
+        # 计算执行的轮次数
+        rounds_executed = sum([
+            1 if report.round1 else 0,
+            1 if report.round2 else 0,
+            1 if report.round3 else 0
+        ])
+
+        logger.debug(f"Rounds executed: {rounds_executed}")
+        logger.debug(f"Device fail counts: {device_fail_count}")
+
+        # 根据失败次数确定状态
+        for hostname, devices in device_fail_count.items():
+            for device, fail_count in devices.items():
+                if fail_count == 0:
                     final_status[hostname][device] = DeviceStatus.NORMAL
+                elif fail_count >= rounds_executed:
+                    # 所有轮次都失败，标记为异常
+                    final_status[hostname][device] = DeviceStatus.ABNORMAL
+                elif fail_count >= 2:
+                    # 多轮失败，标记为异常
+                    final_status[hostname][device] = DeviceStatus.ABNORMAL
+                else:
+                    # 部分轮次失败，标记为疑似
+                    final_status[hostname][device] = DeviceStatus.SUSPECTED
+                logger.debug(f"Final status: {hostname}:{device} = {final_status[hostname][device]} (fail_count={fail_count})")
 
         return final_status
 
@@ -499,6 +524,7 @@ class ThreePhaseTester:
 
         abnormal_hosts = set()
         abnormal_devices = []
+        suspected_devices = []
         normal_devices = []
 
         for hostname, devices in report.final_status.items():
@@ -506,6 +532,8 @@ class ThreePhaseTester:
                 if status == DeviceStatus.ABNORMAL:
                     abnormal_hosts.add(hostname)
                     abnormal_devices.append(f"{hostname}:{device}")
+                elif status == DeviceStatus.SUSPECTED:
+                    suspected_devices.append(f"{hostname}:{device}")
                 elif status == DeviceStatus.NORMAL:
                     normal_devices.append(f"{hostname}:{device}")
 
@@ -515,9 +543,11 @@ class ThreePhaseTester:
             "normal_hosts": total_hosts - len(abnormal_hosts),
             "abnormal_hosts": len(abnormal_hosts),
             "normal_devices": len(normal_devices),
+            "suspected_devices": len(suspected_devices),
             "abnormal_devices": len(abnormal_devices),
             "abnormal_device_list": abnormal_devices,
-            "all_normal": len(abnormal_hosts) == 0,
+            "suspected_device_list": suspected_devices,
+            "all_normal": len(abnormal_hosts) == 0 and len(suspected_devices) == 0,
             "rounds_executed": sum([
                 1 if report.round1 else 0,
                 1 if report.round2 else 0,
@@ -543,17 +573,77 @@ class ThreePhaseTester:
             f"- 正常主机: {report.summary.get('normal_hosts', 0)}",
             f"- 异常主机: {report.summary.get('abnormal_hosts', 0)}",
             f"- 正常设备: {report.summary.get('normal_devices', 0)}",
+            f"- 疑似设备: {report.summary.get('suspected_devices', 0)}",
             f"- 异常设备: {report.summary.get('abnormal_devices', 0)}",
             f"- 执行轮次: {report.summary.get('rounds_executed', 0)}",
             "",
         ]
 
+        # 异常设备列表
         if report.summary.get('abnormal_devices', 0) > 0:
             lines.append("## 异常设备列表\n")
             for device in report.summary.get('abnormal_device_list', []):
+                lines.append(f"- **{device}**")
+            lines.append("")
+
+        # 疑似设备列表
+        if report.summary.get('suspected_devices', 0) > 0:
+            lines.append("## 疑似设备列表\n")
+            for device in report.summary.get('suspected_device_list', []):
                 lines.append(f"- {device}")
             lines.append("")
 
+        # 测试详情
+        lines.append("## 测试详情\n")
+
+        # 收集所有测试结果中的错误信息
+        error_details = {}  # {(host, device): [error_messages]}
+
+        for phase_result in [report.round1, report.round2, report.round3]:
+            if not phase_result:
+                continue
+            phase_name = {
+                TestPhase.ROUND_1: "第一轮",
+                TestPhase.ROUND_2: "第二轮",
+                TestPhase.ROUND_3: "第三轮"
+            }.get(phase_result.phase, "未知")
+
+            for item in phase_result.results:
+                result = item.get("result", {})
+                pair = item.get("pair", {})
+
+                if not result.get("success", False):
+                    server_host = pair.get("server_host", "")
+                    client_host = pair.get("client_host", "")
+                    server_device = pair.get("server_device", "")
+                    client_device = pair.get("client_device", "")
+                    error_msg = result.get("error_message", "未知错误")
+                    bandwidth = result.get("bandwidth_gbps", 0)
+
+                    # 记录服务器端设备错误
+                    key_s = (server_host, server_device)
+                    if key_s not in error_details:
+                        error_details[key_s] = []
+                    error_details[key_s].append(f"[{phase_name}] {client_host}:{client_device} -> 带宽:{bandwidth}Gbps - {error_msg}")
+
+                    # 记录客户端设备错误
+                    key_c = (client_host, client_device)
+                    if key_c not in error_details:
+                        error_details[key_c] = []
+                    error_details[key_c].append(f"[{phase_name}] {server_host}:{server_device} <- 带宽:{bandwidth}Gbps - {error_msg}")
+
+        if error_details:
+            lines.append("### 错误详情\n")
+            lines.append("| 主机 | 设备 | 错误信息 |")
+            lines.append("|------|------|----------|")
+            for (host, device), errors in sorted(error_details.items()):
+                error_str = "<br>".join(errors[:3])  # 最多显示3条
+                if len(errors) > 3:
+                    error_str += f"<br>...还有{len(errors)-3}条"
+                lines.append(f"| {host} | {device} | {error_str} |")
+            lines.append("")
+
+        # 设备状态详情
         lines.append("## 设备状态详情\n")
         lines.append("| 主机 | 设备 | 状态 |")
         lines.append("|------|------|------|")
