@@ -130,12 +130,13 @@ class RoCEPingTester:
             logger.error(f"[{host}] 获取网卡 {interface} IP地址失败: {e}")
             return None
 
-    def get_rdma_interfaces(self, host: str) -> Dict[str, str]:
+    def get_rdma_interfaces(self, host: str, exclude_patterns: List[str] = None) -> Dict[str, str]:
         """
         获取主机上所有RDMA网卡及其IP地址
 
         Args:
             host: 主机名或IP
+            exclude_patterns: 要排除的网卡名称模式列表 (如 ['bond', 'mgmt'])
 
         Returns:
             字典 {interface_name: ip_address}
@@ -146,6 +147,10 @@ class RoCEPingTester:
             logger.warning(f"[{host}] RDMA检测器未初始化，无法获取RDMA网卡")
             return interfaces
 
+        if exclude_patterns is None:
+            # 默认排除 bond 设备和以 bond 开头的设备（通常是管理网）
+            exclude_patterns = ['bond', 'mgmt']
+
         try:
             # 获取所有RDMA设备
             devices = self.rdma_detector.get_all_devices(host)
@@ -153,12 +158,25 @@ class RoCEPingTester:
             for device in devices:
                 # 获取设备对应的网卡
                 netdev = self.rdma_detector.get_device_netdev(host, device)
-                if netdev:
-                    # 获取网卡IP
-                    ip = self.get_interface_ip(host, netdev)
-                    if ip:
-                        interfaces[netdev] = ip
-                        logger.debug(f"[{host}] {device} -> {netdev} -> {ip}")
+                if not netdev:
+                    continue
+
+                # 检查是否应该排除该网卡
+                should_exclude = False
+                for pattern in exclude_patterns:
+                    if pattern.lower() in netdev.lower():
+                        should_exclude = True
+                        logger.debug(f"[{host}] 排除网卡 {netdev} (匹配模式: {pattern})")
+                        break
+
+                if should_exclude:
+                    continue
+
+                # 获取网卡IP
+                ip = self.get_interface_ip(host, netdev)
+                if ip:
+                    interfaces[netdev] = ip
+                    logger.debug(f"[{host}] {device} -> {netdev} -> {ip}")
 
             return interfaces
 
@@ -255,34 +273,66 @@ class RoCEPingTester:
 
     def test_host_pair(self, host1: str, host2: str,
                        host1_interfaces: Dict[str, str],
-                       host2_interfaces: Dict[str, str]) -> List[PingResult]:
+                       host2_interfaces: Dict[str, str],
+                       max_workers: int = 16) -> List[PingResult]:
         """
-        测试一对主机之间所有网卡的ping连通性
+        测试一对主机之间所有网卡的ping连通性（并发执行）
 
         Args:
             host1: 主机1
             host2: 主机2
             host1_interfaces: 主机1的网卡和IP {interface: ip}
             host2_interfaces: 主机2的网卡和IP {interface: ip}
+            max_workers: 最大并发数
 
         Returns:
             PingResult列表
         """
-        results = []
+        from concurrent.futures import ThreadPoolExecutor, as_completed
 
+        results = []
+        ping_tasks = []
+
+        # 收集所有 ping 任务
         # host1的每个网卡 ping host2的每个网卡
         for if1, ip1 in host1_interfaces.items():
             for if2, ip2 in host2_interfaces.items():
-                result = self.ping_test(host1, if1, host2, ip2)
-                result.target_interface = if2
-                results.append(result)
+                ping_tasks.append((host1, if1, host2, ip2, if2))
 
         # host2的每个网卡 ping host1的每个网卡（双向测试）
         for if2, ip2 in host2_interfaces.items():
             for if1, ip1 in host1_interfaces.items():
-                result = self.ping_test(host2, if2, host1, ip1)
-                result.target_interface = if1
-                results.append(result)
+                ping_tasks.append((host2, if2, host1, ip1, if1))
+
+        # 并发执行所有 ping 测试
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {}
+            for task in ping_tasks:
+                src_host, src_if, tgt_host, tgt_ip, tgt_if = task
+                future = executor.submit(
+                    self.ping_test, src_host, src_if, tgt_host, tgt_ip
+                )
+                futures[future] = (src_host, src_if, tgt_host, tgt_ip, tgt_if)
+
+            for future in as_completed(futures):
+                src_host, src_if, tgt_host, tgt_ip, tgt_if = futures[future]
+                try:
+                    result = future.result()
+                    result.target_interface = tgt_if
+                    results.append(result)
+                except Exception as e:
+                    # 创建失败的 result
+                    result = PingResult(
+                        source_host=src_host,
+                        source_interface=src_if,
+                        source_ip="",
+                        target_host=tgt_host,
+                        target_interface=tgt_if,
+                        target_ip=tgt_ip,
+                        success=False,
+                        error_message=str(e)
+                    )
+                    results.append(result)
 
         return results
 
