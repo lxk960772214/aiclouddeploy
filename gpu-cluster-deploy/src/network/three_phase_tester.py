@@ -423,6 +423,9 @@ class ThreePhaseTester:
         # 如果第一轮全部正常且配置了跳过
         if skip_round2_if_all_normal and not round1_abnormal_hosts:
             logger.info("第一轮测试全部正常，跳过后续轮次")
+            # 仍然需要生成最终状态和设备统计
+            report.final_status = self._determine_final_status(report, hosts)
+            report.device_stats = self._generate_device_stats(report, hosts)
             report.summary = self._generate_summary(report)
             return report
 

@@ -186,6 +186,7 @@ class RoCEPingTester:
 
     def ping_test(self, source_host: str, source_interface: str,
                   target_host: str, target_ip: str,
+                  source_ip: str = None,
                   count: int = 1, deadline: int = 3) -> PingResult:
         """
         执行单个ping测试
@@ -195,13 +196,16 @@ class RoCEPingTester:
             source_interface: 源网卡
             target_host: 目标主机名
             target_ip: 目标IP
+            source_ip: 源IP地址 (可选，如果不提供则动态获取)
             count: ping次数 (默认1次)
             deadline: 总超时时间(秒)，无论发多少包都会在此时停止 (默认3秒)
 
         Returns:
             PingResult对象
         """
-        source_ip = self.get_interface_ip(source_host, source_interface)
+        # 如果没有提供源IP，才动态获取
+        if not source_ip:
+            source_ip = self.get_interface_ip(source_host, source_interface)
 
         result = PingResult(
             source_host=source_host,
@@ -274,7 +278,7 @@ class RoCEPingTester:
     def test_host_pair(self, host1: str, host2: str,
                        host1_interfaces: Dict[str, str],
                        host2_interfaces: Dict[str, str],
-                       max_workers: int = 16) -> List[PingResult]:
+                       max_workers: int = 4) -> List[PingResult]:
         """
         测试一对主机之间所有网卡的ping连通性（并发执行）
 
@@ -283,7 +287,7 @@ class RoCEPingTester:
             host2: 主机2
             host1_interfaces: 主机1的网卡和IP {interface: ip}
             host2_interfaces: 主机2的网卡和IP {interface: ip}
-            max_workers: 最大并发数
+            max_workers: 最大并发数 (默认4，避免SSH通道耗尽)
 
         Returns:
             PingResult列表
@@ -297,20 +301,20 @@ class RoCEPingTester:
         # host1的每个网卡 ping host2的每个网卡
         for if1, ip1 in host1_interfaces.items():
             for if2, ip2 in host2_interfaces.items():
-                ping_tasks.append((host1, if1, host2, ip2, if2))
+                ping_tasks.append((host1, if1, ip1, host2, ip2, if2))
 
         # host2的每个网卡 ping host1的每个网卡（双向测试）
         for if2, ip2 in host2_interfaces.items():
             for if1, ip1 in host1_interfaces.items():
-                ping_tasks.append((host2, if2, host1, ip1, if1))
+                ping_tasks.append((host2, if2, ip2, host1, ip1, if1))
 
         # 并发执行所有 ping 测试
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = {}
             for task in ping_tasks:
-                src_host, src_if, tgt_host, tgt_ip, tgt_if = task
+                src_host, src_if, src_ip, tgt_host, tgt_ip, tgt_if = task
                 future = executor.submit(
-                    self.ping_test, src_host, src_if, tgt_host, tgt_ip
+                    self.ping_test, src_host, src_if, tgt_host, tgt_ip, src_ip
                 )
                 futures[future] = (src_host, src_if, tgt_host, tgt_ip, tgt_if)
 
