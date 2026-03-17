@@ -61,6 +61,7 @@ gpu-cluster-deploy/
 │   │   ├── connectivity_checker.py  # 网络连通性检查
 │   │   ├── rdma_detector.py         # RDMA 设备检测
 │   │   ├── ibandwidth_tester.py     # IB 带宽测试
+│   │   ├── roce_ping_tester.py      # RoCE Ping 连通性测试
 │   │   ├── three_phase_tester.py    # 三轮测试策略
 │   │   ├── ip_resolver.py           # IP 解析器
 │   │   └── deployment_verifier.py   # 部署验证器
@@ -463,7 +464,7 @@ nodes:
 
 **执行流程：**
 
-1. **Phase 0** (step_00, step_0b): 使用**登录用户**连接（部署用户可能不存在）
+1. **Phase 0** (step_0, step_0b): 使用**登录用户**连接（部署用户可能不存在）
 2. **Phase 1** (step_0d): 使用**登录用户**配置 SSH 免密
    - 如果 deploy_user ≠ login_user，自动创建 deploy_user 并配置 sudo 免密
 3. **Phase 2+**: 使用**部署用户**免密连接
@@ -620,6 +621,11 @@ python src/main.py --new-cli --plan config/plans/full.yaml --continue-on-error
 
 提供独立的网络测试工具，用于验证 RDMA 网络配置和定位异常设备。
 
+#### 测试内容
+
+1. **RoCE Ping 连通性测试** - 对所有主机的所有计算网卡执行全量 ping 测试（N×M 矩阵）
+2. **ib_write_bw 带宽测试** - 三轮测试策略精确定位异常设备
+
 #### 三轮测试策略
 
 通过三轮测试精确定位异常网络设备：
@@ -627,6 +633,11 @@ python src/main.py --new-cli --plan config/plans/full.yaml --continue-on-error
 1. **第一轮：相邻配对测试** - 测试 (1,2), (3,4), ...
 2. **第二轮：错位配对测试** - 测试 (2,3), (4,5), ...
 3. **第三轮：异常定位** - 使用正常主机定位异常设备
+
+**重要说明：**
+- 当主机数量为奇数时，最后一台主机在第一轮被跳过，必须执行第二轮
+- 只有当主机数量为偶数且第一轮全部正常时，才会跳过后续轮次
+- RoCE Ping 测试独立于带宽测试，不会因为 ping 失败而跳过带宽测试
 
 #### 网络测试 CLI
 
@@ -977,9 +988,9 @@ python src/main.py export --format json --output plan.json
 
 | 步骤 | 名称 | 描述 | 需要 Sudo | 需要重启 |
 |------|------|------|-----------|----------|
-| 00 | 设备一致性检查 | 检查集群设备一致性（使用登录用户） | 否 | 否 |
+| 0 | 设备一致性检查 | 检查集群设备一致性（使用登录用户） | 否 | 否 |
 | 0b | 网络连通性检查 | 检查 IP/DNS/HTTP 连通性（使用登录用户） | 否 | 否 |
-| 0c | RDMA 网络测试 | 三轮测试定位异常网络设备 | 否 | 否 |
+| 0c | RDMA 网络测试 | 三轮测试定位异常网络设备（含 RoCE Ping 测试） | 否 | 否 |
 | 0d | SSH 免密配置 | 配置 SSH 免密登录（使用登录用户） | 是 | 否 |
 | 01 | 依赖安装 | 安装基础依赖包 | 是 | 否 |
 | 02 | 内核检查 | 检查内核版本兼容性 | 是 | 可能 |
