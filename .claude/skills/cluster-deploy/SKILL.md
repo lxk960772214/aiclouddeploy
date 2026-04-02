@@ -260,40 +260,98 @@ echo "OFED: $(ofed_info -s 2>/dev/null || echo '未安装')"
 
 ## 安装包管理
 
-### 优先级顺序
+### 目录位置
 
-1. **packageslist.md 中的下载链接** - 优先使用
-2. **本地 packages 目录** - 备选方案
+```
+/mnt/e/openclaw-workspace/deploy/packages/
+├── packageslist.md                    # 安装包下载清单（必需）
+├── cuda_12.8.0_570.86.10_linux.run    # 本地安装包（可选）
+├── NVIDIA-Linux-x86_64-590.48.01.run  # 本地安装包（可选）
+└── MLNX_OFED_LINUX-*.tgz              # 本地安装包（可选）
+```
+
+### 安装包获取优先级
+
+1. **packageslist.md 中的下载链接** - **最高优先级**，必须先从此文件查找
+2. **本地 packages 目录中的文件** - 次优先级
 3. **默认下载地址** - 最后选择
+
+### packageslist.md 文件路径
+
+```
+/mnt/e/openclaw-workspace/deploy/packages/packageslist.md
+```
+
+### packageslist.md 格式（Markdown 表格）
+
+```markdown
+## CUDA Toolkit
+
+| 版本 | 文件名 | 下载地址 | 状态 | 备注 |
+|------|--------|----------|------|------|
+| 12.8 | cuda_12.8.0_570.86.10_linux.run | https://developer.download.nvidia.com/compute/cuda/12.8.0/local_installers/cuda_12.8.0_570.86.10_linux.run | ✅ 可用 | 已下载到本地 (5.4GB) |
+
+## NVIDIA 驱动
+
+| 版本 | 文件名 | 下载地址 | 状态 | 备注 |
+|------|--------|----------|------|------|
+| 590.48.01 | NVIDIA-Linux-x86_64-590.48.01.run | https://file.mir.blsc.cn/deploy/NVIDIA/driver/NVIDIA-Linux-x86_64-590.48.01.run | ✅ 可用 | 已下载到本地 |
+
+## MLNX_OFED 驱动
+
+| 版本 | 文件名 | 下载地址 | 状态 | 备注 |
+|------|--------|----------|------|------|
+| 24.10-2.1.8.0 | MLNX_OFED_LINUX-24.10-2.1.8.0-ubuntu22.04-x86_64.tgz | https://file.mir.blsc.cn/deploy/MLNX_OFED/MLNX_OFED_LINUX-24.10-2.1.8.0-ubuntu22.04-x86_64.tgz | ✅ 可用 | 已下载到本地 |
+
+## NCCL
+
+| 版本 | 来源 | 下载地址 | 状态 | 备注 |
+|------|------|----------|------|------|
+| latest | GitHub | https://github.com/NVIDIA/nccl | ⏳ 待验证 | 源码编译 |
+```
 
 ### 解析 packageslist.md
 
-从 packageslist.md 中提取:
+从 Markdown 表格中提取下载链接:
 
-| 软件 | 版本 | 文件名 | 下载地址 |
-|------|------|--------|----------|
-| CUDA | 12.8 | cuda_12.8.0_570.86.10_linux.run | https://developer.download.nvidia.com/... |
-| NVIDIA Driver | 590.48.01 | NVIDIA-Linux-x86_64-590.48.01.run | https://file.mir.blsc.cn/... |
-| MLNX_OFED | 24.10-2.1.8.0 | MLNX_OFED_LINUX-24.10-2.1.8.0-ubuntu22.04-x86_64.tgz | https://file.mir.blsc.cn/... |
+| 软件 | 表格标题 | 关键列 |
+|------|----------|--------|
+| CUDA | `## CUDA Toolkit` | 版本、文件名、下载地址 |
+| NVIDIA 驱动 | `## NVIDIA 驱动` | 版本、文件名、下载地址 |
+| MLNX_OFED | `## MLNX_OFED 驱动` | 版本、文件名、下载地址 |
+| NCCL | `## NCCL` | 版本、下载地址 |
 
-### 配置文件中的引用
+### 部署时安装包处理流程
+
+```
+1. 读取 /mnt/e/openclaw-workspace/deploy/packages/packageslist.md
+2. 解析 Markdown 表格，提取各软件的版本、文件名、下载地址
+3. 根据 versions.yaml 中的版本号匹配对应行
+4. 如果找到匹配版本 → 使用表格中的下载地址
+5. 如果未找到 → 检查本地 packages 目录是否存在对应文件
+6. 如果本地存在 → 上传到目标服务器
+7. 都不存在 → 报错提示缺少安装包
+```
+
+### versions.yaml 配置示例
 
 ```yaml
-# versions.yaml
+# 只需指定版本号，下载链接从 packageslist.md 自动获取
 cuda:
   version: "12.8"
+  mode: "install"
   toolkit_file: "cuda_12.8.0_570.86.10_linux.run"
-  # 自动填充 download_url
+  # download_url 从 packageslist.md 自动获取
 
 nvidia_driver:
   version: "590.48.01"
-  file: "NVIDIA-Linux-x86_64-590.48.01.run"
-  # 自动填充 download_url
+  mode: "keep"
 
 mlnx_ofed:
   version: "24.10-2.1.8.0"
+  mode: "install"
   file: "MLNX_OFED_LINUX-24.10-2.1.8.0-ubuntu22.04-x86_64.tgz"
-  # 自动填充 download_url
+  # download_url 从 packageslist.md 自动获取
 ```
 
 ## 配置模板
