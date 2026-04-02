@@ -29,8 +29,17 @@ jumphost:
   #   password: "node-password"
 
 # 集群节点配置
+# ============================================================
+# ⚠️ 磁盘操作说明:
+#   1. 如果不对磁盘做任何操作（不挂载、不格式化、不配置RAID）：
+#      - 直接省略 storage 配置即可
+#   2. 如果只需挂载已格式化的磁盘：
+#      - 配置 storage，但 format_disk: false（默认值）
+#   3. 如果需要格式化磁盘：
+#      - 设置 format_disk: true（⚠️ 会清除磁盘所有数据）
+# ============================================================
 nodes:
-  # NFS Server节点
+  # 示例1：完整配置（包含RAID和NFS）
   - hostname: "gpu-master"
     ip: "10.254.43.65"
     port: 22                   # SSH端口（可选，默认22）
@@ -51,7 +60,7 @@ nodes:
       filesystem: "ext4"       # ext4 | xfs
       format_disk: false       # ⚠️ 高危：是否格式化磁盘（默认false）
 
-  # GPU计算节点
+  # 示例2：单盘配置
   - hostname: "gpu-node-01"
     ip: "10.254.43.66"
     username: "root"           # ⚠️ 登录用户（必须指定）
@@ -63,6 +72,15 @@ nodes:
       device: "/dev/nvme0n1"
       mount_point: "/ssd"
       format_disk: false       # ⚠️ 默认false，防止数据丢失
+
+  # 示例3：不对磁盘做任何操作（省略 storage 配置）
+  # - hostname: "gpu-node-02"
+  #   ip: "10.254.43.67"
+  #   username: "root"
+  #   password: "your-password"
+  #   roles:
+  #     - gpu_node
+  #   # 不配置 storage，跳过磁盘相关操作
 
 # 网络配置
 network:
@@ -178,6 +196,25 @@ ssh_key:
 #   mount_point   - 挂载点
 #   filesystem    - 文件系统: ext4 / xfs
 #   format_disk   - ⚠️ 高危: 是否格式化（默认false）
+#
+# ⚠️ 磁盘操作场景说明:
+#   场景1 - 不对磁盘做任何操作:
+#     直接省略 storage 配置，跳过所有磁盘相关步骤
+#     示例:
+#       nodes:
+#         - hostname: "gpu-node"
+#           ip: "10.0.0.1"
+#           username: "root"
+#           password: "xxx"
+#           roles: [gpu_node]
+#           # 不配置 storage
+#
+#   场景2 - 只挂载已格式化的磁盘:
+#     配置 storage，format_disk 保持默认 false
+#
+#   场景3 - 格式化并挂载新磁盘:
+#     配置 storage，设置 format_disk: true
+#     ⚠️ 这会永久删除磁盘上的所有数据
 #
 # ⚠️ 高危操作说明:
 #   format_disk: true 会永久删除磁盘上的所有数据
