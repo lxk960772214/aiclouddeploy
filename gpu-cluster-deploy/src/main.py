@@ -300,6 +300,13 @@ class GPUClusterDeploy:
 
             if not result.success:
                 success = False
+                # 可选步骤失败不中断流程
+                if step.is_optional:
+                    self.logger.warning(
+                        f"[{step_id}] 可选步骤失败，继续执行后续步骤: {result.message}"
+                    )
+                    continue
+                # 不可跳过的步骤失败则中断
                 if not step.can_skip:
                     break
 

@@ -63,6 +63,7 @@ class BaseStep(ABC):
     can_skip: bool = False
     max_retries: int = 3
     timeout: int = 300  # 秒
+    is_optional: bool = False  # 是否为可选步骤，失败不影响整体流程
 
     # 批量执行配置
     supports_batch: bool = True  # 是否支持批量执行
@@ -319,6 +320,21 @@ class BaseStep(ABC):
                 )
                 self.logger.error(f"[{self.step_id}] 执行异常: {e}")
 
+                # 区分代码错误和网络错误
+                # 代码错误（NameError, AttributeError, TypeError, SyntaxError 等）不应重试
+                is_code_error = isinstance(e, (
+                    NameError, AttributeError, TypeError, SyntaxError,
+                    ValueError, KeyError, IndexError, ImportError,
+                    NotImplementedError, AssertionError
+                ))
+
+                if is_code_error:
+                    # 代码错误，直接失败，不重试
+                    self.logger.error(
+                        f"[{self.step_id}] 代码级错误，跳过重试: {type(e).__name__}: {e}"
+                    )
+                    break
+
                 if self._retry_count < self.max_retries:
                     self._status = StepStatus.RETRY
                     self.logger.warning(
@@ -560,12 +576,13 @@ class BaseStep(ABC):
             下载结果字典
         """
         # 创建监控脚本
-        monitor_script = f'''
+        # 注意：使用普通字符串拼接而非 f-string，避免 shell 变量 ${VAR} 被 Python 解释
+        monitor_script = '''
 set -e
 
-DEST_FILE="{dest}"
-URL="{url}"
-STALL_TIMEOUT={stall_timeout}
+DEST_FILE="''' + dest + '''"
+URL="''' + url + '''"
+STALL_TIMEOUT=''' + str(stall_timeout) + '''
 
 # 检查下载工具
 if command -v wget >/dev/null 2>&1; then

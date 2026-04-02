@@ -737,6 +737,68 @@ class SSHManager:
             logger.error(traceback.format_exc())
             return False
 
+    def execute_on_jumphost(self, host: str, port: int, username: str,
+                           password: Optional[str], command: str,
+                           timeout: int = 30) -> SSHResult:
+        """
+        在跳板机上执行命令
+
+        Args:
+            host: 跳板机主机
+            port: 跳板机端口
+            username: 用户名
+            password: 密码
+            command: 要执行的命令
+            timeout: 超时时间
+
+        Returns:
+            SSHResult: 执行结果
+        """
+        # 确保跳板机已连接
+        if not self._jump_connected or not self.jump_client:
+            # 临时更新 jumphost_config 以连接
+            original_config = self.jumphost_config
+            self.jumphost_config = {
+                "host": host,
+                "port": port,
+                "username": username,
+                "password": password
+            }
+            if not self.connect_jumphost(timeout):
+                return SSHResult(
+                    success=False,
+                    exit_code=-1,
+                    stdout="",
+                    stderr="无法连接跳板机",
+                    host=host,
+                    command=command
+                )
+            self.jumphost_config = original_config
+
+        try:
+            stdin, stdout, stderr = self.jump_client.exec_command(command, timeout=timeout)
+            exit_code = stdout.channel.recv_exit_status()
+            stdout_str = stdout.read().decode('utf-8', errors='replace')
+            stderr_str = stderr.read().decode('utf-8', errors='replace')
+
+            return SSHResult(
+                success=exit_code == 0,
+                exit_code=exit_code,
+                stdout=stdout_str,
+                stderr=stderr_str,
+                host=host,
+                command=command
+            )
+        except Exception as e:
+            return SSHResult(
+                success=False,
+                exit_code=-1,
+                stdout="",
+                stderr=str(e),
+                host=host,
+                command=command
+            )
+
     def close_all(self):
         """关闭所有连接"""
         for conn in self.connections.values():

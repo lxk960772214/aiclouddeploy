@@ -215,6 +215,48 @@ class SSHKeySetup(BaseStep):
 
         return results
 
+    def _get_jumphost_pubkey(self) -> Optional[str]:
+        """
+        获取跳板机的公钥
+
+        Returns:
+            跳板机公钥，如果无跳板机则返回 None
+        """
+        if not self.config or not hasattr(self.config, 'jumphost') or not self.config.jumphost:
+            return None
+
+        jumphost = self.config.jumphost
+        if not hasattr(jumphost, 'host') or not jumphost.host:
+            return None
+
+        # 获取跳板机认证信息
+        jh_user = "root"
+        jh_password = None
+        jh_port = 22
+
+        if hasattr(jumphost, 'auth') and jumphost.auth:
+            jh_user = getattr(jumphost.auth, 'username', 'root') or 'root'
+            jh_password = getattr(jumphost.auth, 'password', None)
+            jh_port = getattr(jumphost, 'port', 22) or 22
+        elif hasattr(jumphost, 'username'):
+            jh_user = jumphost.username or 'root'
+            jh_password = getattr(jumphost, 'password', None)
+            jh_port = getattr(jumphost, 'port', 22) or 22
+
+        try:
+            # 连接跳板机获取公钥
+            result = self.ssh_manager.execute_on_jumphost(
+                jumphost.host, jh_port, jh_user, jh_password,
+                "cat ~/.ssh/id_rsa.pub 2>/dev/null || ssh-keygen -t rsa -N '' -f ~/.ssh/id_rsa && cat ~/.ssh/id_rsa.pub"
+            )
+            if result.success and result.stdout.strip():
+                self.logger.info(f"[跳板机] 获取公钥成功")
+                return result.stdout.strip()
+        except Exception as e:
+            self.logger.warning(f"[跳板机] 获取公钥失败: {e}")
+
+        return None
+
     def execute(self, hosts: List[str]) -> StepResult:
         """执行SSH免密配置"""
         results = {}
@@ -258,6 +300,14 @@ class SSHKeySetup(BaseStep):
 
         # 存储每个用户的公钥: {username: [pubkey1, pubkey2, ...]}
         all_pubkeys_by_user: Dict[str, List[str]] = {user: [] for user in users}
+
+        # 2.5 获取跳板机公钥（如果有跳板机）
+        jumphost_pubkey = self._get_jumphost_pubkey()
+        if jumphost_pubkey:
+            self.logger.info("获取跳板机公钥成功，将添加到所有节点的 authorized_keys")
+            # 跳板机公钥添加到所有用户
+            for username in users:
+                all_pubkeys_by_user[username].append(jumphost_pubkey)
 
         # 3. 在所有节点为所有用户生成SSH密钥对
         self.logger.info("生成SSH密钥对...")

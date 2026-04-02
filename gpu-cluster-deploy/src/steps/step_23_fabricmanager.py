@@ -20,6 +20,7 @@ class FabricManager(BaseStep):
     requires_sudo = True
     supports_batch = True  # 改为支持批量执行
     can_skip = True  # 非NVLink显卡可跳过
+    is_optional = True  # 标记为可选组件，失败不影响整体流程
 
     def _check_nvlink_batch(self, hosts: List[str]) -> Dict[str, bool]:
         """批量检查是否有NVLink"""
