@@ -218,6 +218,49 @@ class FabricManager(BaseStep):
             host_results=results
         )
 
+    def is_configured(self, host: str) -> tuple:
+        """
+        检查Fabric Manager是否已配置
+
+        Args:
+            host: 主机地址
+
+        Returns:
+            tuple[bool, str]: (是否已配置, 检查详情)
+        """
+        # 先检查是否有NVLink
+        nvlink_result = self.execute_on_host(
+            host,
+            "nvidia-smi nvlink --status 2>/dev/null | grep -q 'GPU' && echo 'yes' || echo 'no'",
+            timeout=30
+        )
+        has_nvlink = "yes" in nvlink_result.get("stdout", "")
+
+        if not has_nvlink:
+            return True, "无NVLink设备，不需要Fabric Manager"
+
+        # 检查服务状态
+        result = self.execute_on_host(
+            host,
+            "systemctl is-active nvidia-fabricmanager 2>/dev/null || echo 'inactive'",
+            timeout=30
+        )
+        status = result.get("stdout", "").strip()
+
+        if status == "active":
+            return True, "服务运行中"
+        else:
+            # 检查是否已安装但未运行
+            check_result = self.execute_on_host(
+                host,
+                "which nvidia-fabricmanager 2>/dev/null || which nv-fabricmanager 2>/dev/null || echo 'not_installed'",
+                timeout=10
+            )
+            if "not_installed" in check_result.get("stdout", ""):
+                return False, "未安装"
+            else:
+                return False, f"已安装但服务{status}"
+
     def post_check(self, hosts: List[str]) -> bool:
         """验证Fabric Manager"""
         # 非所有机器都需要，跳过验证

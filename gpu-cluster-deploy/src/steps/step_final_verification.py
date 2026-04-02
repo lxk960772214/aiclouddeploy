@@ -793,7 +793,14 @@ class FinalVerification(BaseStep):
             check_item.message = "所有节点正常"
         elif all_fail:
             check_item.status = CheckStatus.FAIL
-            check_item.message = "所有节点异常"
+            # 显示具体失败的节点和原因
+            failed_hosts = []
+            for h in hosts:
+                status = check_item.host_results.get(h)
+                if status in [CheckStatus.FAIL, CheckStatus.UNKNOWN]:
+                    detail = check_item.details.get(h, "")
+                    failed_hosts.append(f"{h}({detail})" if detail else h)
+            check_item.message = f"异常节点: {', '.join(failed_hosts)}"
         else:
             # 检查是否有FAIL
             has_fail = any(
@@ -804,7 +811,14 @@ class FinalVerification(BaseStep):
                 check_item.status = CheckStatus.WARNING
             else:
                 check_item.status = CheckStatus.WARNING
-            check_item.message = "部分节点异常"
+            # 显示具体异常的节点和原因
+            abnormal_hosts = []
+            for h in hosts:
+                status = check_item.host_results.get(h)
+                if status != CheckStatus.PASS:
+                    detail = check_item.details.get(h, "")
+                    abnormal_hosts.append(f"{h}({detail})" if detail else h)
+            check_item.message = f"异常节点: {', '.join(abnormal_hosts)}"
 
     def _print_report_summary(self, report: VerificationReport):
         """打印报告摘要"""
@@ -836,6 +850,11 @@ class FinalVerification(BaseStep):
             self.logger.info("\n失败的检查项:")
             for c in failed_checks:
                 self.logger.info(f"  - {c.name}: {c.message}")
+                # 显示节点详情
+                for host, status in c.host_results.items():
+                    if status in [CheckStatus.FAIL, CheckStatus.UNKNOWN]:
+                        detail = c.details.get(host, "")
+                        self.logger.info(f"      [{host}] {detail}")
 
         # 显示警告的检查项
         warning_checks = [c for c in report.checks if c.status == CheckStatus.WARNING]
@@ -843,6 +862,11 @@ class FinalVerification(BaseStep):
             self.logger.info("\n警告的检查项:")
             for c in warning_checks:
                 self.logger.info(f"  - {c.name}: {c.message}")
+                # 显示节点详情
+                for host, status in c.host_results.items():
+                    if status != CheckStatus.PASS:
+                        detail = c.details.get(host, "")
+                        self.logger.info(f"      [{host}] {detail}")
 
     def _generate_html_report(self, report: VerificationReport):
         """生成HTML报告"""
@@ -948,10 +972,27 @@ class FinalVerification(BaseStep):
                 CheckStatus.UNKNOWN: "未知"
             }.get(check.status, check.status.value)
 
+            # 构建节点详情HTML
+            host_details_html = ""
+            if check.host_results and check.details:
+                host_details_html = '<div class="host-details" style="margin-top: 8px; font-size: 12px; color: #666;">'
+                for host, status in check.host_results.items():
+                    detail = check.details.get(host, "")
+                    host_status_class = f"status-{status.value}"
+                    host_status_text = {
+                        CheckStatus.PASS: "✓",
+                        CheckStatus.FAIL: "✗",
+                        CheckStatus.WARNING: "⚠",
+                        CheckStatus.SKIP: "○",
+                        CheckStatus.UNKNOWN: "?"
+                    }.get(status, "?")
+                    host_details_html += f'<span class="{host_status_class}" style="margin-right: 10px;">{host}: {host_status_text} {detail}</span>'
+                host_details_html += '</div>'
+
             html += f"""                <tr>
                     <td>{check.name}</td>
                     <td class="{status_class}">{status_text}</td>
-                    <td>{check.message}</td>
+                    <td>{check.message}{host_details_html}</td>
                 </tr>
 """
 
