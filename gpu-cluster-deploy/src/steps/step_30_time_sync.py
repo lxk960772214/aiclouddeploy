@@ -56,11 +56,27 @@ logdir /var/log/chrony'''
                 config = self._get_client_config(server_ip)
                 self.logger.info(f"[{host}] 配置为时间客户端")
 
-            # 1. 备份原配置
+            # 0. 检查并安装chrony
+            check_chrony = "which chronyc 2>/dev/null || echo 'not_installed'"
+            check_result = self.execute_on_host(host, check_chrony, sudo=False)
+
+            if "not_installed" in check_result.get("stdout", ""):
+                self.logger.info(f"[{host}] chrony未安装，正在安装...")
+                install_cmd = "apt-get update -qq && apt-get install -y chrony"
+                install_result = self.execute_on_host(host, install_cmd, sudo=True, timeout=120)
+                if not install_result["success"]:
+                    results[host] = {"success": False, "error": "chrony安装失败"}
+                    continue
+
+            # 1. 确保配置目录存在
+            mkdir_cmd = "mkdir -p /etc/chrony /var/lib/chrony /var/log/chrony"
+            self.execute_on_host(host, mkdir_cmd, sudo=True)
+
+            # 2. 备份原配置
             backup_cmd = "cp /etc/chrony/chrony.conf /etc/chrony/chrony.conf.bak 2>/dev/null || true"
             self.execute_on_host(host, backup_cmd, sudo=True)
 
-            # 2. 写入新配置
+            # 3. 写入新配置
             config_cmd = f'''cat > /etc/chrony/chrony.conf << 'EOF'
 {config}
 EOF'''
@@ -70,11 +86,11 @@ EOF'''
                 results[host] = {"success": False, "error": "写入配置失败"}
                 continue
 
-            # 3. 重启chrony服务
+            # 4. 重启chrony服务
             restart_cmd = "systemctl restart chrony && systemctl enable chrony"
             restart_result = self.execute_on_host(host, restart_cmd, sudo=True)
 
-            # 4. 验证
+            # 5. 验证
             verify_cmd = "chronyc sourcestats -v | head -5"
             verify_result = self.execute_on_host(host, verify_cmd)
             results[host] = {
