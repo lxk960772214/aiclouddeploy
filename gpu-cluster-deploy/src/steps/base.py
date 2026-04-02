@@ -541,3 +541,131 @@ class BaseStep(ABC):
             每个主机的上传结果
         """
         return self.batch_executor.copy_file(hosts, local_path, remote_path)
+
+    def smart_download(self, host: str, url: str, dest: str,
+                       sudo: bool = False, stall_timeout: int = 300,
+                       total_timeout: int = 7200) -> Dict[str, Any]:
+        """
+        智能下载：监控文件增长，只有长时间不增长才超时
+
+        Args:
+            host: 目标主机
+            url: 下载URL
+            dest: 目标文件路径
+            sudo: 是否使用sudo
+            stall_timeout: 停滞超时（秒），默认5分钟无增长则终止
+            total_timeout: 总超时（秒），默认2小时
+
+        Returns:
+            下载结果字典
+        """
+        # 创建监控脚本
+        monitor_script = f'''
+set -e
+
+DEST_FILE="{dest}"
+URL="{url}"
+STALL_TIMEOUT={stall_timeout}
+
+# 检查下载工具
+if command -v wget >/dev/null 2>&1; then
+    HAS_WGET=1
+else
+    HAS_WGET=0
+fi
+
+if command -v curl >/dev/null 2>&1; then
+    HAS_CURL=1
+else
+    HAS_CURL=0
+fi
+
+if [ "$HAS_WGET" -eq 0 ] && [ "$HAS_CURL" -eq 0 ]; then
+    echo "ERROR: 未找到 wget 或 curl"
+    exit 1
+fi
+
+# 启动下载（不设置超时，由监控脚本控制）
+if [ "$HAS_WGET" -eq 1 ]; then
+    wget -q -c -O "$DEST_FILE" --timeout=0 --tries=0 "$URL" 2>/dev/null &
+else
+    curl -s -L -C - -o "$DEST_FILE" --connect-timeout 60 --retry 0 -f "$URL" 2>/dev/null &
+fi
+DOWNLOAD_PID=$!
+
+# 监控文件增长
+LAST_SIZE=0
+LAST_PROGRESS=$(date +%s)
+START_TIME=$(date +%s)
+
+while kill -0 $DOWNLOAD_PID 2>/dev/null; do
+    if [ -f "$DEST_FILE" ]; then
+        CURRENT_SIZE=$(stat -c%s "$DEST_FILE" 2>/dev/null || echo 0)
+        CURRENT_TIME=$(date +%s)
+
+        if [ "$CURRENT_SIZE" -gt "$LAST_SIZE" ]; then
+            LAST_SIZE=$CURRENT_SIZE
+            LAST_PROGRESS=$CURRENT_TIME
+            # 每10MB打印进度
+            SIZE_MB=$((CURRENT_SIZE / 1048576))
+            if [ $((SIZE_MB % 10)) -eq 0 ] && [ "$LAST_SIZE" -ne "$CURRENT_SIZE" ]; then
+                echo "PROGRESS: ${SIZE_MB} MB"
+            fi
+        else
+            # 检查停滞超时
+            STALLED=$((CURRENT_TIME - LAST_PROGRESS))
+            if [ "$STALLED" -gt "$STALL_TIMEOUT" ]; then
+                echo "ERROR: 下载停滞超时 ($STALL_TIMEOUT 秒无数据增长)"
+                echo "ERROR: 已下载 $((LAST_SIZE / 1048576)) MB"
+                echo "ERROR: 建议: 检查网络连接或使用其他下载源"
+                kill $DOWNLOAD_PID 2>/dev/null || true
+                exit 1
+            fi
+        fi
+    fi
+    sleep 2
+done
+
+# 检查下载结果
+wait $DOWNLOAD_PID
+EXIT_CODE=$?
+
+if [ $EXIT_CODE -ne 0 ]; then
+    echo "ERROR: 下载进程退出码: $EXIT_CODE"
+    exit 1
+fi
+
+if [ ! -f "$DEST_FILE" ] || [ ! -s "$DEST_FILE" ]; then
+    echo "ERROR: 下载后文件不存在或为空"
+    exit 1
+fi
+
+FINAL_SIZE=$(stat -c%s "$DEST_FILE")
+echo "SUCCESS: 下载完成 $((FINAL_SIZE / 1048576)) MB"
+exit 0
+'''
+        self.logger.info(f"[{host}] 智能下载: {url}")
+        self.logger.info(f"[{host}] 目标: {dest} (停滞超时: {stall_timeout}秒)")
+
+        result = self.execute_on_host(host, monitor_script, sudo=sudo, timeout=total_timeout)
+
+        # 解析输出
+        stdout = result.get("stdout", "")
+        success = result.get("success", False) and "SUCCESS:" in stdout
+
+        if not success:
+            # 提取错误信息
+            for line in stdout.split('\n'):
+                if "ERROR:" in line:
+                    self.logger.error(f"[{host}] {line}")
+        else:
+            for line in stdout.split('\n'):
+                if "SUCCESS:" in line:
+                    self.logger.info(f"[{host}] ✅ {line}")
+
+        return {
+            "success": success,
+            "stdout": stdout,
+            "stderr": result.get("stderr", ""),
+            "dest": dest
+        }

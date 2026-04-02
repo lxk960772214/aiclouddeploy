@@ -83,32 +83,37 @@ class FabricManager(BaseStep):
 
             for url in download_urls:
                 self.logger.info(f"[{host}] 尝试下载: {url}")
-                download_cmd = f"wget -q --timeout=30 '{url}' -O {deb_file} 2>&1"
-                download_result = self.execute_on_host(host, download_cmd, sudo=True, timeout=120)
+                # 使用智能下载（监控文件增长，无固定超时）
+                download_result = self.smart_download(
+                    host, url, deb_file,
+                    sudo=True,
+                    stall_timeout=120,  # FabricManager包较小，2分钟无增长即可判断失败
+                    total_timeout=600   # 总超时10分钟
+                )
                 if download_result.get("success"):
-                    # 验证文件是否下载成功
-                    check_result = self.execute_on_host(host, f"test -s {deb_file} && echo 'ok' || echo 'empty'", timeout=10)
-                    if "ok" in check_result.get("stdout", ""):
-                        self.logger.info(f"[{host}] 下载成功")
-                        # 使用 dpkg 安装
-                        install_cmd = f"dpkg -i {deb_file} 2>&1 || apt-get install -f -y"
-                        install_result = self.execute_on_host(host, install_cmd, sudo=True, timeout=120)
-                        if install_result.get("success"):
-                            install_success = True
+                    self.logger.info(f"[{host}] 下载成功")
+                    # 使用 dpkg 安装
+                    install_cmd = f"dpkg -i {deb_file} 2>&1 || apt-get install -f -y"
+                    install_result = self.execute_on_host(host, install_cmd, sudo=True, timeout=120)
+                    if install_result.get("success"):
+                        install_success = True
                         break
-                    else:
-                        self.logger.warning(f"[{host}] 下载文件为空，尝试下一个源")
+                else:
+                    self.logger.warning(f"[{host}] 下载失败，尝试下一个源")
 
             # 方法2: 如果下载失败，尝试使用 apt 安装
             if not install_success:
                 self.logger.info(f"[{host}] 尝试使用 apt 安装 fabricmanager...")
-                # 添加 NVIDIA CUDA 仓库
-                add_repo_cmd = f"""
-                wget -q https://developer.download.nvidia.com/compute/cuda/repos/{repo_name}/{arch}/cuda-keyring_1.1-1_all.deb -O /tmp/cuda-keyring.deb 2>/dev/null && \
-                dpkg -i /tmp/cuda-keyring.deb 2>/dev/null && \
-                apt-get update -qq
-                """
-                self.execute_on_host(host, add_repo_cmd, sudo=True, timeout=60)
+                # 添加 NVIDIA CUDA 仓库（使用智能下载）
+                keyring_url = f"https://developer.download.nvidia.com/compute/cuda/repos/{repo_name}/{arch}/cuda-keyring_1.1-1_all.deb"
+                keyring_result = self.smart_download(
+                    host, keyring_url, "/tmp/cuda-keyring.deb",
+                    sudo=True,
+                    stall_timeout=60,
+                    total_timeout=120
+                )
+                if keyring_result.get("success"):
+                    self.execute_on_host(host, "dpkg -i /tmp/cuda-keyring.deb && apt-get update -qq", sudo=True, timeout=60)
 
                 # 尝试安装 fabricmanager
                 apt_packages = [
