@@ -113,8 +113,10 @@ class PackageDownloader:
         cmd = [
             "wget", "-c",  # 断点续传
             "-O", str(dest),
-            "--timeout=60",
-            "--tries=3",
+            "--timeout=300",  # 5分钟网络空闲超时（大文件下载需要更长）
+            "--tries=10",     # 增加重试次数
+            "--waitretry=5",  # 重试等待5秒
+            "--progress=bar:force",  # 显示进度
             url
         ]
         try:
@@ -393,9 +395,9 @@ class PackageManager:
 
         # 构建下载命令
         if has_wget:
-            download_cmd = f"wget -c -O {jumphost_path} --timeout=60 --tries=3 '{package.download_url}'"
+            download_cmd = f"wget -c -O {jumphost_path} --timeout=300 --tries=10 --waitretry=5 '{package.download_url}'"
         else:
-            download_cmd = f"curl -L -C - -o {jumphost_path} --connect-timeout 60 --retry 3 -f '{package.download_url}'"
+            download_cmd = f"curl -L -C - -o {jumphost_path} --connect-timeout 60 --retry 10 --retry-delay 5 -f '{package.download_url}'"
 
         self.logger.info(f"[登录服务器] 执行下载命令...")
         stdin, stdout, stderr = self.ssh_manager.jump_client.exec_command(download_cmd, timeout=7200)
