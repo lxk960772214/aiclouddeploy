@@ -337,6 +337,35 @@ class DiskMount(BaseStep):
             host_results=all_results
         )
 
+    def is_configured(self, host: str) -> tuple:
+        """
+        检查数据盘是否已挂载
+
+        Args:
+            host: 主机地址
+
+        Returns:
+            tuple[bool, str]: (是否已配置, 检查详情)
+        """
+        # 获取节点存储配置
+        node = None
+        for n in self.config.nodes:
+            if n.ip == host:
+                node = n
+                break
+
+        if not node or not node.storage:
+            return True, "未配置存储，跳过"
+
+        mount_point = node.storage.mount_point
+
+        # 检查挂载点是否已挂载
+        result = self.execute_on_host(host, f"mountpoint -q {mount_point} && echo 'mounted' || echo 'not_mounted'", sudo=False)
+
+        if "mounted" in result.get("stdout", ""):
+            return True, f"{mount_point} 已挂载"
+        return False, f"{mount_point} 未挂载"
+
     def post_check(self, hosts: List[str]) -> bool:
         """验证磁盘挂载"""
         for host in hosts:

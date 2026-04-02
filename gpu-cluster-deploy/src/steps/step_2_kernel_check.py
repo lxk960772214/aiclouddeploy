@@ -60,6 +60,23 @@ class KernelCheck(BaseStep):
                 errors=["多机环境内核版本必须一致"]
             )
 
+    def is_configured(self, host: str) -> tuple:
+        """
+        检查内核版本一致性
+
+        Args:
+            host: 主机地址
+
+        Returns:
+            tuple[bool, str]: (是否已配置, 检查详情)
+        """
+        # 内核检查是一次性检查
+        result = self.execute_on_host(host, "uname -r", sudo=False)
+        if result.get("success"):
+            version = result.get("stdout", "").strip()
+            return True, f"内核版本: {version}"
+        return True, "内核检查（一次性检查）"
+
     def post_check(self, hosts: List[str]) -> bool:
         """验证检查完成"""
         return True

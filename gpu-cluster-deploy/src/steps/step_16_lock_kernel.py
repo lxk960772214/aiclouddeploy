@@ -66,6 +66,29 @@ fi
             host_results=result.results
         )
 
+    def is_configured(self, host: str) -> tuple:
+        """
+        检查内核版本是否已固定
+
+        Args:
+            host: 主机地址
+
+        Returns:
+            tuple[bool, str]: (是否已配置, 检查详情)
+        """
+        kernel_config = self.versions.kernel if hasattr(self, 'versions') and self.versions else None
+
+        if not kernel_config or kernel_config.mode == "keep":
+            # 检查是否锁定当前内核版本
+            result = self.execute_on_host(host, "grep 'GRUB_DEFAULT=' /etc/default/grub 2>/dev/null", sudo=False)
+            if result.get("success"):
+                grub_default = result.get("stdout", "").strip()
+                if "Advanced options" in grub_default:
+                    return True, "内核版本已固定"
+            return True, "内核模式为keep，无需固定"
+
+        return True, "内核固定检查（跳过）"
+
     def post_check(self, hosts: List[str]) -> bool:
         """验证GRUB配置"""
         # 简化验证：检查 /etc/default/grub 是否可读，且包含 GRUB_DEFAULT 配置

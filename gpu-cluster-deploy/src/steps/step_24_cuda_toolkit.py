@@ -24,6 +24,40 @@ class CUDAToolkit(BaseStep):
     supports_batch = True  # 改为支持批量执行
     timeout = 2400  # 40分钟（下载+安装可能需要更长时间）
 
+    def is_configured(self, host: str) -> tuple:
+        """
+        检查CUDA Toolkit是否已安装
+
+        Args:
+            host: 主机地址
+
+        Returns:
+            tuple[bool, str]: (是否已配置, 检查详情)
+        """
+        # 检查 nvcc 命令
+        result = self.execute_on_host(
+            host, "/usr/local/cuda/bin/nvcc -V 2>/dev/null | grep 'release' | awk '{print $6}'",
+            timeout=30
+        )
+
+        if result.get("success") and result.get("stdout", "").strip():
+            version = result["stdout"].strip().replace(",", "")
+
+            # 检查版本是否匹配配置
+            if hasattr(self, 'versions') and self.versions and self.versions.cuda:
+                target_version = self.versions.cuda.version
+                if target_version in version:
+                    return True, f"CUDA已安装: {version}"
+
+            return True, f"CUDA已安装: {version}"
+
+        # 检查 /usr/local/cuda 符号链接
+        result = self.execute_on_host(host, "ls -la /usr/local/cuda 2>/dev/null", timeout=30)
+        if result.get("success") and "cuda" in result.get("stdout", ""):
+            return True, "CUDA目录存在"
+
+        return False, "CUDA未安装"
+
     def _prepare_package(self, hosts: List[str]) -> dict:
         """
         准备CUDA安装包

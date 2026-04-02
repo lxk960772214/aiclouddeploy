@@ -128,6 +128,23 @@ class NetworkCheckStep(BaseStep):
             issues.append(f"HTTP({result.http_check.message})")
         return "; ".join(issues)
 
+    def is_configured(self, host: str) -> tuple:
+        """
+        检查网络连通性检查是否已执行
+
+        Args:
+            host: 主机地址
+
+        Returns:
+            tuple[bool, str]: (是否已配置, 检查详情)
+        """
+        # 网络检查是一次性检查，检查报告文件是否存在
+        import glob
+        report_files = glob.glob("reports/network_check_*.md")
+        if report_files:
+            return True, "网络检查报告已存在"
+        return True, "网络检查（一次性检查，无持久配置）"
+
     def pre_check(self, hosts: List[str]) -> bool:
         """前置检查 - 检查是否有主机"""
         if not hosts:

@@ -48,6 +48,30 @@ EOF'''
             host_results=initramfs_result.results
         )
 
+    def is_configured(self, host: str) -> tuple:
+        """
+        检查NVIDIA内核模块配置
+
+        Args:
+            host: 主机地址
+
+        Returns:
+            tuple[bool, str]: (是否已配置, 检查详情)
+        """
+        # 检查配置文件
+        result = self.execute_on_host(host, "test -f /etc/modules-load.d/nvidia.conf && test -f /etc/modprobe.d/nvidia.conf && echo 'configured' || echo 'not_configured'", sudo=False)
+
+        if "configured" in result.get("stdout", ""):
+            # 检查 nvidia_peermem 模块是否已加载
+            mod_result = self.execute_on_host(host, "lsmod | grep -c nvidia_peermem || echo 0", timeout=30)
+            if mod_result.get("success"):
+                count = int(mod_result.get("stdout", "0").strip())
+                if count > 0:
+                    return True, "NVIDIA内核模块已配置并加载"
+            return True, "NVIDIA内核模块配置已创建（需重启加载）"
+
+        return False, "NVIDIA内核模块未配置"
+
     def post_check(self, hosts: List[str]) -> bool:
         """验证模块配置"""
         cmd = "test -f /etc/modules-load.d/nvidia.conf && test -f /etc/modprobe.d/nvidia.conf"

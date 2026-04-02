@@ -93,6 +93,40 @@ class HostnameHosts(BaseStep):
             host_results=all_results
         )
 
+    def is_configured(self, host: str) -> tuple:
+        """
+        检查主机名和hosts是否已配置
+
+        Args:
+            host: 主机地址
+
+        Returns:
+            tuple[bool, str]: (是否已配置, 检查详情)
+        """
+        # 获取节点信息
+        node = None
+        for n in self.config.nodes:
+            if n.ip == host:
+                node = n
+                break
+
+        if not node:
+            return False, "节点未在配置中"
+
+        # 检查主机名
+        hostname_result = self.execute_on_host(host, "hostname", sudo=False)
+        current_hostname = hostname_result.get("stdout", "").strip()
+
+        if current_hostname != node.hostname:
+            return False, f"主机名不匹配: 当前={current_hostname}, 目标={node.hostname}"
+
+        # 检查hosts文件
+        hosts_result = self.execute_on_host(host, f"grep -q '{node.hostname}' /etc/hosts && echo 'found' || echo 'not_found'", sudo=False)
+        if "found" not in hosts_result.get("stdout", ""):
+            return False, f"hosts文件中未找到 {node.hostname}"
+
+        return True, f"主机名和hosts已配置: {node.hostname}"
+
     def post_check(self, hosts: List[str]) -> bool:
         """验证hosts设置"""
         for host in hosts:

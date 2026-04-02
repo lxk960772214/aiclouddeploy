@@ -215,6 +215,47 @@ class NFSConfig(BaseStep):
             host_results=results
         )
 
+    def is_configured(self, host: str) -> tuple:
+        """
+        检查NFS是否已配置
+
+        Args:
+            host: 主机地址
+
+        Returns:
+            tuple[bool, str]: (是否已配置, 检查详情)
+        """
+        nfs_config = self.config.nfs
+        if not nfs_config or not nfs_config.enabled:
+            return True, "NFS未启用，跳过"
+
+        nfs_server = self.config.nfs_server_node
+        if not nfs_server:
+            return True, "未配置NFS服务器"
+
+        # 获取服务器IP
+        server_ip = self._get_nfs_server_ip(nfs_server.hostname)
+        if not server_ip:
+            return False, "无法获取NFS服务器IP"
+
+        client_mount = nfs_config.client_mount
+
+        # 检查当前节点是否是NFS服务器
+        node = self.config.get_node_by_ip(host) or self.config.get_node_by_hostname(host)
+        if node and node.hostname == nfs_server.hostname:
+            # 服务器端检查
+            result = self.execute_on_host(host, "systemctl is-active nfs-server 2>/dev/null || echo 'inactive'", timeout=30)
+            if "active" in result.get("stdout", ""):
+                return True, "NFS服务器已配置"
+            return False, "NFS服务器未运行"
+
+        # 客户端检查
+        result = self.execute_on_host(host, f"mountpoint -q {client_mount} && echo 'mounted' || echo 'not_mounted'", timeout=30)
+        if "mounted" in result.get("stdout", ""):
+            return True, f"NFS客户端已挂载: {client_mount}"
+
+        return False, f"NFS客户端未挂载: {client_mount}"
+
     def post_check(self, hosts: List[str]) -> bool:
         """验证NFS配置"""
         nfs_config = self.config.nfs

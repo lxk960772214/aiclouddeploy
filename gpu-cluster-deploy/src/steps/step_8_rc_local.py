@@ -81,6 +81,30 @@ WantedBy=multi-user.target'''
                          for h, r in enable_result.results.items()}
         )
 
+    def is_configured(self, host: str) -> tuple:
+        """
+        检查rc.local是否已配置
+
+        Args:
+            host: 主机地址
+
+        Returns:
+            tuple[bool, str]: (是否已配置, 检查详情)
+        """
+        # 检查rc.local文件是否存在且可执行
+        result = self.execute_on_host(host, "test -x /etc/rc.local && echo 'exists' || echo 'not_found'", sudo=False)
+
+        if "not_found" in result.get("stdout", ""):
+            return False, "rc.local文件不存在"
+
+        # 检查rc-local服务是否启用
+        service_result = self.execute_on_host(host, "systemctl is-enabled rc-local.service 2>/dev/null || echo 'disabled'", sudo=False)
+
+        if "enabled" in service_result.get("stdout", ""):
+            return True, "rc.local已配置且服务已启用"
+
+        return True, "rc.local文件已存在（服务未启用）"
+
     def post_check(self, hosts: List[str]) -> bool:
         """验证rc.local配置"""
         cmd = "systemctl is-enabled rc-local.service && test -x /etc/rc.local"

@@ -80,6 +80,34 @@ chmod +x {script_path}'''
             host_results=exec_result.results
         )
 
+    def is_configured(self, host: str) -> tuple:
+        """
+        检查ACS是否已禁用
+
+        Args:
+            host: 主机地址
+
+        Returns:
+            tuple[bool, str]: (是否已配置, 检查详情)
+        """
+        # 检查脚本是否存在
+        result = self.execute_on_host(host, "test -x /usr/local/bin/disable_acs.sh && echo 'script_exists' || echo 'no_script'", sudo=False)
+
+        if "script_exists" not in result.get("stdout", ""):
+            return False, "ACS禁用脚本不存在"
+
+        # 检查ACS是否已禁用（当前状态）
+        acs_result = self.execute_on_host(host, "lspci -vvv 2>/dev/null | grep -c 'ACSCtl.*SrcValid+' || echo 0", sudo=True, timeout=60)
+
+        if acs_result.get("success"):
+            count = int(acs_result.get("stdout", "0").strip())
+            if count == 0:
+                return True, "ACS已禁用"
+            else:
+                return False, f"ACS未完全禁用: {count} 个设备启用"
+
+        return True, "ACS禁用脚本已配置"
+
     def post_check(self, hosts: List[str]) -> bool:
         """验证ACS配置"""
         cmd = "test -x /usr/local/bin/disable_acs.sh"

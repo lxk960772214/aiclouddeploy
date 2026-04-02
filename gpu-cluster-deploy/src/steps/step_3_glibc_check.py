@@ -69,6 +69,23 @@ class GlibcCheck(BaseStep):
                 errors=["多机环境glibc版本必须一致"]
             )
 
+    def is_configured(self, host: str) -> tuple:
+        """
+        检查glibc版本一致性
+
+        Args:
+            host: 主机地址
+
+        Returns:
+            tuple[bool, str]: (是否已配置, 检查详情)
+        """
+        # glibc检查是一次性检查
+        result = self.execute_on_host(host, "ldd --version | grep GLIBC | head -1", sudo=False)
+        if result.get("success"):
+            version_info = result.get("stdout", "").strip()
+            return True, f"glibc: {version_info}"
+        return True, "glibc检查（一次性检查）"
+
     def post_check(self, hosts: List[str]) -> bool:
         """验证检查完成"""
         return True

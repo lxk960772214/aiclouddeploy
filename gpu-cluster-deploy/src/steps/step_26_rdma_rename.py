@@ -195,6 +195,34 @@ chmod +x {script_path}'''
             host_results=results
         )
 
+    def is_configured(self, host: str) -> tuple:
+        """
+        检查RDMA网卡是否已重命名
+
+        Args:
+            host: 主机地址
+
+        Returns:
+            tuple[bool, str]: (是否已配置, 检查详情)
+        """
+        if not self.is_enabled:
+            return True, "RDMA重命名已禁用"
+
+        # 检查是否有标准命名的RDMA设备
+        result = self.execute_on_host(host, "rdma dev show 2>/dev/null | grep -E 'mlx5_[0-9]' | wc -l", timeout=30)
+
+        if result.get("success"):
+            count = int(result.get("stdout", "0").strip())
+            if count > 0:
+                return True, f"RDMA设备已重命名: {count} 个标准命名设备"
+
+        # 检查是否有任何RDMA设备
+        result = self.execute_on_host(host, "rdma dev show 2>/dev/null | wc -l", timeout=30)
+        if result.get("success") and int(result.get("stdout", "0").strip()) > 0:
+            return False, "RDMA设备存在但未标准化命名"
+
+        return True, "无RDMA设备或已禁用重命名"
+
     def post_check(self, hosts: List[str]) -> bool:
         """验证网卡重命名"""
         cmd = "rdma dev show | grep -q mlx5_0"

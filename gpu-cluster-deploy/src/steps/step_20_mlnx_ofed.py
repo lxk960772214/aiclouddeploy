@@ -60,6 +60,42 @@ class MellanoxDriver(BaseStep):
         # 准备安装包
         return manager.prepare_package(package, hosts, dest_path=f"/tmp/{package.filename}")
 
+    def is_configured(self, host: str) -> tuple:
+        """
+        检查MLNX_OFED驱动是否已安装
+
+        Args:
+            host: 主机地址
+
+        Returns:
+            tuple[bool, str]: (是否已配置, 检查详情)
+        """
+        # 检查 ofed_info 命令
+        result = self.execute_on_host(host, "ofed_info -s 2>/dev/null | head -1", timeout=30)
+
+        if result.get("success") and result.get("stdout", "").strip():
+            raw_version = result["stdout"].strip()
+            # 提取版本号
+            import re
+            match = re.search(r'MLNX_OFED_LINUX-(\d+\.\d+-[\d.]+)', raw_version)
+            if match:
+                version = match.group(1)
+            else:
+                match = re.search(r'(\d+\.\d+-[\d.]+)', raw_version)
+                version = match.group(1) if match else raw_version
+
+            # 检查版本是否匹配配置
+            if hasattr(self, 'versions') and self.versions and self.versions.mlnx_ofed:
+                target_version = self.versions.mlnx_ofed.version
+                if target_version in version or version in target_version:
+                    return True, f"MLNX_OFED已安装: {version}"
+                else:
+                    return True, f"MLNX_OFED已安装(版本不同): {version} (目标: {target_version})"
+
+            return True, f"MLNX_OFED已安装: {version}"
+
+        return False, "MLNX_OFED未安装"
+
     def _detect_mlnx_batch(self, hosts: List[str]) -> Dict[str, Tuple[bool, Optional[str]]]:
         """
         批量检测节点上是否已安装MLNX_OFED

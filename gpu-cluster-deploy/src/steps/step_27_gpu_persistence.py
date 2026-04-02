@@ -63,6 +63,36 @@ EOF'''
             host_results=verify_result.results
         )
 
+    def is_configured(self, host: str) -> tuple:
+        """
+        检查GPU持久模式是否已配置
+
+        Args:
+            host: 主机地址
+
+        Returns:
+            tuple[bool, str]: (是否已配置, 检查详情)
+        """
+        # 检查持久模式服务
+        result = self.execute_on_host(host, "systemctl is-enabled nvidia-persistence-mode.service 2>/dev/null || echo 'disabled'", timeout=30)
+
+        if "enabled" in result.get("stdout", ""):
+            # 验证持久模式是否生效
+            pm_result = self.execute_on_host(host, "nvidia-smi -q 2>/dev/null | grep -c 'Persistence Mode.*Enabled'", timeout=30)
+            count = int(pm_result.get("stdout", "0").strip())
+            if count > 0:
+                return True, f"GPU持久模式已配置: {count} GPU"
+            return True, "持久模式服务已启用"
+
+        # 检查当前持久模式状态
+        result = self.execute_on_host(host, "nvidia-smi -q 2>/dev/null | grep -c 'Persistence Mode.*Enabled'", timeout=30)
+        if result.get("success"):
+            count = int(result.get("stdout", "0").strip())
+            if count > 0:
+                return True, f"GPU持久模式已启用: {count} GPU (服务未配置)"
+
+        return False, "GPU持久模式未配置"
+
     def post_check(self, hosts: List[str]) -> bool:
         """验证GPU持久模式"""
         cmd = "nvidia-smi -q | grep -q 'Persistence Mode.*Enabled'"

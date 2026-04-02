@@ -110,6 +110,36 @@ EOF'''
             host_results=results
         )
 
+    def is_configured(self, host: str) -> tuple:
+        """
+        检查时间同步是否已配置
+
+        Args:
+            host: 主机地址
+
+        Returns:
+            tuple[bool, str]: (是否已配置, 检查详情)
+        """
+        # 检查 chrony 是否安装和运行
+        result = self.execute_on_host(host, "systemctl is-active chrony 2>/dev/null || echo 'inactive'", timeout=30)
+
+        status = result.get("stdout", "").strip()
+
+        if status == "active":
+            # 检查时间同步状态
+            tracking_result = self.execute_on_host(host, "chronyc tracking 2>/dev/null | grep 'Last offset'", timeout=30)
+            if tracking_result.get("success") and tracking_result.get("stdout", "").strip():
+                return True, "chrony服务运行中"
+
+            return True, "chrony服务已启用"
+
+        # 检查 chrony 是否安装
+        check_result = self.execute_on_host(host, "which chronyc 2>/dev/null || echo 'not_installed'", timeout=10)
+        if "not_installed" in check_result.get("stdout", ""):
+            return False, "chrony未安装"
+
+        return False, f"chrony服务状态: {status}"
+
     def post_check(self, hosts: List[str]) -> bool:
         """验证时间同步"""
         cmd = "chronyc tracking | grep -q 'Reference ID'"

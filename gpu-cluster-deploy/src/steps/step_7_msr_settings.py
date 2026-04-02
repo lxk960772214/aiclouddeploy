@@ -99,6 +99,36 @@ class MSRSettings(BaseStep):
             host_results=all_results
         )
 
+    def is_configured(self, host: str) -> tuple:
+        """
+        检查MSR设置是否已配置
+
+        Args:
+            host: 主机地址
+
+        Returns:
+            tuple[bool, str]: (是否已配置, 检查详情)
+        """
+        # 检查是否需要MSR设置
+        if not self._needs_msr(host):
+            return True, "非目标机型，无需MSR设置"
+
+        # 检查msr模块是否加载
+        result = self.execute_on_host(host, "lsmod | grep -q msr && echo 'loaded' || echo 'not_loaded'", sudo=False)
+
+        if "not_loaded" in result.get("stdout", ""):
+            return False, "msr模块未加载"
+
+        # 尝试读取MSR值
+        verify_result = self.execute_on_host(host, "rdmsr -a 0xc8b 2>/dev/null | uniq || echo 'error'", sudo=True)
+
+        if verify_result.get("success") and verify_result.get("stdout", "").strip():
+            value = verify_result["stdout"].strip()
+            if "ffff" in value.lower():
+                return True, f"MSR已配置: {value}"
+
+        return False, "MSR未正确配置"
+
     def post_check(self, hosts: List[str]) -> bool:
         """验证MSR设置"""
         return True  # 跳过验证，因为非所有机型都需要

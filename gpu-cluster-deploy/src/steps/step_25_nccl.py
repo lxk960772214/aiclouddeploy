@@ -17,6 +17,31 @@ class NCCLInstall(BaseStep):
     can_skip = True
     timeout = 1800  # 30分钟
 
+    def is_configured(self, host: str) -> tuple:
+        """
+        检查NCCL是否已安装
+
+        Args:
+            host: 主机地址
+
+        Returns:
+            tuple[bool, str]: (是否已配置, 检查详情)
+        """
+        nccl_config = self.versions.nccl if hasattr(self, 'versions') and self.versions else None
+
+        if not nccl_config or not nccl_config.enabled:
+            return True, "NCCL未启用，跳过"
+
+        install_path = nccl_config.install_path
+
+        # 检查NCCL库文件
+        result = self.execute_on_host(host, f"test -d {install_path}/lib && ls {install_path}/lib/ 2>/dev/null | head -3", timeout=30)
+
+        if result.get("success") and result.get("stdout", "").strip():
+            return True, f"NCCL已安装: {install_path}"
+
+        return False, "NCCL未安装"
+
     def execute(self, hosts: List[str]) -> StepResult:
         """执行NCCL安装"""
         results = {}

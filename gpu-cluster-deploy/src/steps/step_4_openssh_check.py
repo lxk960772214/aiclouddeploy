@@ -123,6 +123,25 @@ class OpenSSHCheck(BaseStep):
                 details={"versions": ssh_versions, "vulnerable": vulnerable_hosts}
             )
 
+    def is_configured(self, host: str) -> tuple:
+        """
+        检查OpenSSH版本安全性
+
+        Args:
+            host: 主机地址
+
+        Returns:
+            tuple[bool, str]: (是否已配置, 检查详情)
+        """
+        result = self.execute_on_host(host, "dpkg -l | grep 'openssh-client' | awk '{print $3}'", sudo=False)
+        if result.get("success"):
+            version = result.get("stdout", "").strip().split('\n')[0]
+            if version and self._compare_versions(version, self.MIN_SAFE_VERSION) >= 0:
+                return True, f"OpenSSH版本安全: {version}"
+            else:
+                return False, f"OpenSSH版本过低: {version}"
+        return False, "无法获取OpenSSH版本"
+
     def post_check(self, hosts: List[str]) -> bool:
         """验证OpenSSH版本"""
         cmd = "ssh -V 2>&1"

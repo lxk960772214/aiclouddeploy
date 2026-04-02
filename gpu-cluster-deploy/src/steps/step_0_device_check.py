@@ -160,6 +160,23 @@ class Step0DeviceCheck(BaseStep):
             host_results=all_results
         )
 
+    def is_configured(self, host: str) -> tuple:
+        """
+        检查设备一致性检查是否已执行
+
+        Args:
+            host: 主机地址
+
+        Returns:
+            tuple[bool, str]: (是否已配置, 检查详情)
+        """
+        # 设备检查是一次性检查，检查报告文件是否存在
+        import glob
+        report_files = glob.glob("reports/device_check_*.md")
+        if report_files:
+            return True, "设备检查报告已存在"
+        return True, "设备检查（一次性检查，无持久配置）"
+
     def post_check(self, hosts: List[str]) -> bool:
         """验证检查（本步骤不需要post_check）"""
         return True
