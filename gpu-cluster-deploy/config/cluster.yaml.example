@@ -5,54 +5,123 @@
 cluster:
   name: "gpu-cluster-001"
   description: "生产环境GPU集群"
+  deploy_user: "ubuntu"      # 部署用户（可选，默认使用登录用户）
+  create_users: false        # 是否创建ubuntu用户（默认false，如需创建设为true）
 
 # 跳转服务器配置
 jumphost:
-  host: "1.2.3.4"           # 公网IP（必填）
+  host: "1.2.3.4"            # 公网IP（必填）
   port: 22                   # SSH端口
+  # 认证配置 - 格式一（推荐）
   auth:
     type: "key"              # key | password
     username: "ubuntu"
-    # 密钥认证方式
     private_key: "~/.ssh/id_rsa"
-    # 或密码认证方式（二选一）
     # password: "your-password"
+  # 或格式二（扁平格式，向后兼容）
+  # username: "ubuntu"
+  # password: "your-password"
+  # private_key: "~/.ssh/id_rsa"
+  # 节点认证配置（可选，用于访问内网节点）
+  # node_auth:
+  #   type: "password"
+  #   username: "root"
+  #   password: "node-password"
 
 # 集群节点配置
 nodes:
   # NFS Server节点
   - hostname: "gpu-master"
     ip: "10.254.43.65"
+    port: 22                   # SSH端口（可选，默认22）
+    username: "root"           # ⚠️ 登录用户（必须指定）
+    password: "your-password"  # 登录密码
+    # private_key: "~/.ssh/node-key"  # 或使用密钥
     roles:
       - nfs_server
       - time_server
     storage:
-      type: "raid10"         # single | raid1 | raid10
+      type: "raid10"           # single | raid1 | raid10
       devices:
         - "/dev/nvme0n1"
         - "/dev/nvme1n1"
         - "/dev/nvme2n1"
         - "/dev/nvme3n1"
       mount_point: "/ssd"
+      filesystem: "ext4"       # ext4 | xfs
+      format_disk: false       # ⚠️ 高危：是否格式化磁盘（默认false）
 
   # GPU计算节点
   - hostname: "gpu-node-01"
     ip: "10.254.43.66"
+    username: "root"           # ⚠️ 登录用户（必须指定）
+    password: "your-password"
     roles:
       - gpu_node
     storage:
       type: "single"
       device: "/dev/nvme0n1"
       mount_point: "/ssd"
+      format_disk: false       # ⚠️ 默认false，防止数据丢失
 
 # 网络配置
 network:
-  # IB/RoCE网卡命名规则
-  nics:
-    compute_400g:
-      pattern: "mlx5_[0-7]"
-      count: 8
-      net_prefix: "ib"       # 对应网络设备名 ib0-ib7
+  # ib_write_bw测试参数
+  ib_write_bw:
+    duration: 10              # 测试持续时间(秒)
+    size: 65536               # 测试数据块大小(字节)
+    port_base: 18500          # 基础端口号
+    min_bandwidth_percent: 90 # 最低带宽百分比要求
+
+  # 管理网络 (25G bond网络)
+  management:
+    description: "管理网络 (25G bond网络)"
+    interfaces:
+      - ens19f0np0
+    rdma_devices:
+      - mlx5_bond_0
+    enabled: true
+    skip_performance_test: true   # 管理网通常跳过性能测试
+    skip_inter_host_test: true    # 管理网跳过跨主机测试
+    theoretical_bandwidth_gbps: 25
+
+  # 计算网络 (400G RoCE网络)
+  compute:
+    description: "计算网络 (400G RoCE网络)"
+    interfaces:
+      - ens11np0
+      - ens12np0
+      - ens13np0
+      - ens14np0
+      - ens15np0
+      - ens16np0
+      - ens17np0
+      - ens18np0
+    rdma_devices:
+      - mlx5_0
+      - mlx5_1
+      - mlx5_2
+      - mlx5_3
+      - mlx5_4
+      - mlx5_5
+      - mlx5_6
+      - mlx5_7
+    enabled: true
+    skip_performance_test: false
+    skip_inter_host_test: false
+    theoretical_bandwidth_gbps: 400
+
+  # 存储网络 (200G RoCE网络)
+  storage:
+    description: "存储网络 (200G RoCE网络)"
+    interfaces:
+      - ens22np0
+    rdma_devices:
+      - mlx5_10
+    enabled: true
+    skip_performance_test: false
+    skip_inter_host_test: false
+    theoretical_bandwidth_gbps: 200
 
 # NFS配置（可选）
 nfs:
@@ -65,3 +134,51 @@ nfs:
 time_sync:
   server: "gpu-master"       # 时间服务器主机名
   timezone: "Asia/Shanghai"
+
+# SSH免密配置（可选）
+ssh_key:
+  enabled: true              # 是否启用免密配置
+  users:                     # 要配置免密的用户列表
+    - ubuntu
+  # private_key: "~/.ssh/id_rsa"
+  # public_key: "~/.ssh/id_rsa.pub"
+
+# ============================================================
+# 配置字段说明
+# ============================================================
+#
+# cluster 配置:
+#   name          - 集群名称（必填）
+#   description   - 集群描述
+#   deploy_user   - 部署过程中使用的目标用户（可选，默认使用登录用户）
+#   create_users  - 是否创建ubuntu用户（默认false）
+#
+# jumphost 配置:
+#   host          - 跳转服务器IP（必填）
+#   port          - SSH端口（默认22）
+#   auth.type     - 认证类型: key / password
+#   auth.username - 跳转服务器用户名
+#   auth.password - 密码认证时的密码
+#   auth.private_key - 密钥认证时的私钥路径
+#   node_auth     - 访问内网节点的认证配置（可选）
+#
+# nodes 配置:
+#   hostname      - 主机名（必填）
+#   ip            - IP地址（必填）
+#   port          - SSH端口（默认22）
+#   username      - ⚠️ 登录用户（必须指定）
+#   password      - 登录密码
+#   private_key   - 私钥路径
+#   roles         - 角色: gpu_node, nfs_server, time_server
+#
+# storage 配置:
+#   type          - 存储类型: single / raid1 / raid10
+#   device        - single模式下的设备路径
+#   devices       - raid模式下的设备列表
+#   mount_point   - 挂载点
+#   filesystem    - 文件系统: ext4 / xfs
+#   format_disk   - ⚠️ 高危: 是否格式化（默认false）
+#
+# ⚠️ 高危操作说明:
+#   format_disk: true 会永久删除磁盘上的所有数据
+#   必须明确确认每个节点的格式化设置
