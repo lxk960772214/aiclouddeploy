@@ -7,6 +7,7 @@
 - 单次下载: 在登录服务器下载一次，然后分发给所有节点
 - 校验机制: 下载后验证 MD5/SHA256
 - 缓存管理: 避免重复下载
+- 智能超时: 监控文件增长，只有长时间不增长才超时
 """
 
 import os
@@ -20,6 +21,7 @@ import logging
 import subprocess
 import time
 import shutil
+import threading
 
 logger = logging.getLogger(__name__)
 
@@ -108,56 +110,175 @@ class PackageDownloader:
             logger.error(f"  实际: {actual}")
             return False
 
-    def download_with_wget(self, url: str, dest: Path, timeout: int = 3600) -> bool:
-        """使用 wget 下载"""
+    def download_with_wget(self, url: str, dest: Path, timeout: int = 7200, stall_timeout: int = 300) -> bool:
+        """
+        使用 wget 下载，监控文件增长智能超时
+
+        Args:
+            url: 下载URL
+            dest: 目标文件路径
+            timeout: 总超时时间（秒），默认2小时
+            stall_timeout: 文件停滞超时（秒），默认5分钟无增长则终止
+
+        Returns:
+            bool: 是否下载成功
+        """
+        # 不设置wget自身的timeout，完全由监控脚本控制
         cmd = [
             "wget", "-c",  # 断点续传
             "-O", str(dest),
-            "--timeout=300",  # 5分钟网络空闲超时（大文件下载需要更长）
-            "--tries=10",     # 增加重试次数
-            "--waitretry=5",  # 重试等待5秒
-            "--progress=bar:force",  # 显示进度
+            "--timeout=0",    # 禁用wget自身超时，由监控控制
+            "--tries=0",      # 无限重试（由我们的监控控制）
             url
         ]
+
         try:
-            result = subprocess.run(cmd, timeout=timeout, capture_output=True, text=True)
-            if result.returncode != 0:
-                logger.error(f"wget 下载失败: returncode={result.returncode}")
-                if result.stderr:
-                    logger.error(f"wget stderr: {result.stderr[:1000]}")
+            # 启动下载进程
+            process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+            last_size = 0
+            last_progress_time = time.time()
+            start_time = time.time()
+
+            while process.poll() is None:
+                current_time = time.time()
+
+                # 检查总超时
+                if current_time - start_time > timeout:
+                    process.terminate()
+                    process.wait(timeout=5)
+                    logger.error(f"❌ 下载总超时（{timeout}秒），已终止下载")
+                    logger.error(f"   URL: {url}")
+                    logger.error(f"   文件: {dest}")
+                    logger.error(f"   已下载: {last_size / 1024 / 1024:.2f} MB")
+                    return False
+
+                # 检查文件大小
+                try:
+                    if dest.exists():
+                        current_size = dest.stat().st_size
+                        if current_size > last_size:
+                            last_size = current_size
+                            last_progress_time = current_time
+                            # 每10MB打印一次进度
+                            if last_size % (10 * 1024 * 1024) < 1024 * 1024:
+                                logger.info(f"📥 下载中: {last_size / 1024 / 1024:.2f} MB")
+                        elif current_time - last_progress_time > stall_timeout:
+                            # 文件长时间不增长
+                            process.terminate()
+                            process.wait(timeout=5)
+                            logger.error(f"❌ 下载停滞超时（{stall_timeout}秒无数据增长）")
+                            logger.error(f"   URL: {url}")
+                            logger.error(f"   文件: {dest}")
+                            logger.error(f"   已下载: {last_size / 1024 / 1024:.2f} MB")
+                            logger.error(f"   建议: 检查网络连接或使用其他下载源")
+                            return False
+                except Exception as e:
+                    logger.debug(f"检查文件大小失败: {e}")
+
+                time.sleep(2)  # 每2秒检查一次
+
+            # 进程结束，检查结果
+            returncode = process.poll()
+            if returncode != 0:
+                _, stderr = process.communicate()
+                logger.error(f"❌ wget 下载失败: returncode={returncode}")
+                if stderr:
+                    logger.error(f"   错误信息: {stderr[:500]}")
                 return False
+
+            logger.info(f"✅ 下载完成: {dest} ({last_size / 1024 / 1024:.2f} MB)")
             return True
-        except subprocess.TimeoutExpired:
-            logger.error(f"下载超时: {url}")
-            return False
+
         except Exception as e:
-            logger.error(f"下载失败: {e}")
+            logger.error(f"❌ 下载失败: {e}")
+            logger.error(f"   URL: {url}")
+            logger.error(f"   文件: {dest}")
             return False
 
-    def download_with_curl(self, url: str, dest: Path, timeout: int = 3600) -> bool:
-        """使用 curl 下载"""
+    def download_with_curl(self, url: str, dest: Path, timeout: int = 7200, stall_timeout: int = 300) -> bool:
+        """
+        使用 curl 下载，监控文件增长智能超时
+
+        Args:
+            url: 下载URL
+            dest: 目标文件路径
+            timeout: 总超时时间（秒），默认2小时
+            stall_timeout: 文件停滞超时（秒），默认5分钟无增长则终止
+
+        Returns:
+            bool: 是否下载成功
+        """
+        # 不设置curl的max-time，只设置连接超时
         cmd = [
             "curl", "-L",  # 跟随重定向
             "-C", "-",  # 断点续传
             "-o", str(dest),
-            "--connect-timeout", "60",
-            "--retry", "3",
+            "--connect-timeout", "60",  # 仅连接超时60秒
+            "--retry", "0",  # 由我们的监控控制重试
             "-f",  # 失败时返回错误码
             url
         ]
+
         try:
-            result = subprocess.run(cmd, timeout=timeout, capture_output=True, text=True)
-            if result.returncode != 0:
-                logger.error(f"curl 下载失败: returncode={result.returncode}")
-                if result.stderr:
-                    logger.error(f"curl stderr: {result.stderr[:1000]}")
+            # 启动下载进程
+            process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+            last_size = 0
+            last_progress_time = time.time()
+            start_time = time.time()
+
+            while process.poll() is None:
+                current_time = time.time()
+
+                # 检查总超时
+                if current_time - start_time > timeout:
+                    process.terminate()
+                    process.wait(timeout=5)
+                    logger.error(f"❌ 下载总超时（{timeout}秒），已终止下载")
+                    logger.error(f"   URL: {url}")
+                    logger.error(f"   文件: {dest}")
+                    logger.error(f"   已下载: {last_size / 1024 / 1024:.2f} MB")
+                    return False
+
+                # 检查文件大小
+                try:
+                    if dest.exists():
+                        current_size = dest.stat().st_size
+                        if current_size > last_size:
+                            last_size = current_size
+                            last_progress_time = current_time
+                        elif current_time - last_progress_time > stall_timeout:
+                            # 文件长时间不增长
+                            process.terminate()
+                            process.wait(timeout=5)
+                            logger.error(f"❌ 下载停滞超时（{stall_timeout}秒无数据增长）")
+                            logger.error(f"   URL: {url}")
+                            logger.error(f"   文件: {dest}")
+                            logger.error(f"   已下载: {last_size / 1024 / 1024:.2f} MB")
+                            logger.error(f"   建议: 检查网络连接或使用其他下载源")
+                            return False
+                except Exception as e:
+                    logger.debug(f"检查文件大小失败: {e}")
+
+                time.sleep(2)  # 每2秒检查一次
+
+            # 进程结束，检查结果
+            returncode = process.poll()
+            if returncode != 0:
+                _, stderr = process.communicate()
+                logger.error(f"❌ curl 下载失败: returncode={returncode}")
+                if stderr:
+                    logger.error(f"   错误信息: {stderr[:500]}")
                 return False
+
+            logger.info(f"✅ 下载完成: {dest} ({last_size / 1024 / 1024:.2f} MB)")
             return True
-        except subprocess.TimeoutExpired:
-            logger.error(f"下载超时: {url}")
-            return False
+
         except Exception as e:
-            logger.error(f"下载失败: {e}")
+            logger.error(f"❌ 下载失败: {e}")
+            logger.error(f"   URL: {url}")
+            logger.error(f"   文件: {dest}")
             return False
 
     def download(self, url: str, dest: Path, timeout: int = 3600) -> bool:
@@ -393,21 +514,110 @@ class PackageManager:
             self.logger.error("[登录服务器] 未找到 wget 或 curl，无法下载")
             return False, None
 
-        # 构建下载命令
-        if has_wget:
-            download_cmd = f"wget -c -O {jumphost_path} --timeout=300 --tries=10 --waitretry=5 '{package.download_url}'"
-        else:
-            download_cmd = f"curl -L -C - -o {jumphost_path} --connect-timeout 60 --retry 10 --retry-delay 5 -f '{package.download_url}'"
+        # 创建下载监控脚本（在登录服务器上执行）
+        # 监控文件增长，只有长时间不增长才超时
+        stall_timeout = 300  # 5分钟无增长则超时
+        monitor_script = f'''
+set -e
 
-        self.logger.info(f"[登录服务器] 执行下载命令...")
-        stdin, stdout, stderr = self.ssh_manager.jump_client.exec_command(download_cmd, timeout=7200)
+DEST_FILE="{jumphost_path}"
+URL="{package.download_url}"
+STALL_TIMEOUT={stall_timeout}
+
+# 启动下载（不设置超时，由监控脚本控制）
+# wget: --timeout=0 表示不超时，或设置很大的值
+# curl: 不设置 --max-time，让下载自然进行
+if [ "{has_wget}" = "True" ] || [ "{has_wget}" = "wget" ]; then
+    # 不设置timeout，让监控脚本控制超时
+    wget -c -O "$DEST_FILE" --timeout=0 --tries=0 "$URL" 2>/dev/null &
+else
+    curl -L -C - -o "$DEST_FILE" --connect-timeout 60 --retry 0 -f "$URL" 2>/dev/null &
+fi
+DOWNLOAD_PID=$!
+
+# 监控文件增长
+LAST_SIZE=0
+LAST_PROGRESS=$(date +%s)
+START_TIME=$(date +%s)
+
+while kill -0 $DOWNLOAD_PID 2>/dev/null; do
+    if [ -f "$DEST_FILE" ]; then
+        CURRENT_SIZE=$(stat -c%s "$DEST_FILE" 2>/dev/null || echo 0)
+        CURRENT_TIME=$(date +%s)
+
+        if [ "$CURRENT_SIZE" -gt "$LAST_SIZE" ]; then
+            LAST_SIZE=$CURRENT_SIZE
+            LAST_PROGRESS=$CURRENT_TIME
+            # 每100MB打印进度
+            if [ $((CURRENT_SIZE / 104857600)) -ne $((LAST_SIZE / 104857600)) ]; then
+                echo "PROGRESS: $((CURRENT_SIZE / 1048576)) MB"
+            fi
+        else
+            # 检查停滞超时
+            STALLED=$((CURRENT_TIME - LAST_PROGRESS))
+            if [ "$STALLED" -gt "$STALL_TIMEOUT" ]; then
+                echo "ERROR: 下载停滞超时 ($STALL_TIMEOUT 秒无数据增长)"
+                echo "ERROR: 已下载 $((LAST_SIZE / 1048576)) MB"
+                echo "ERROR: 建议: 检查网络连接或使用其他下载源"
+                kill $DOWNLOAD_PID 2>/dev/null || true
+                exit 1
+            fi
+        fi
+    fi
+    sleep 2
+done
+
+# 检查下载结果
+wait $DOWNLOAD_PID
+EXIT_CODE=$?
+
+if [ $EXIT_CODE -ne 0 ]; then
+    echo "ERROR: 下载进程退出码: $EXIT_CODE"
+    exit 1
+fi
+
+if [ ! -f "$DEST_FILE" ] || [ ! -s "$DEST_FILE" ]; then
+    echo "ERROR: 下载后文件不存在或为空"
+    exit 1
+fi
+
+FINAL_SIZE=$(stat -c%s "$DEST_FILE")
+echo "SUCCESS: 下载完成 $((FINAL_SIZE / 1048576)) MB"
+exit 0
+'''
+
+        self.logger.info(f"[登录服务器] 执行下载（智能监控模式，停滞超时: {stall_timeout}秒）...")
+        self.logger.info(f"[登录服务器] 下载地址: {package.download_url}")
+
+        stdin, stdout, stderr = self.ssh_manager.jump_client.exec_command(monitor_script, timeout=7200)
+
+        # 实时读取输出
+        output_lines = []
+        while True:
+            line = stdout.readline()
+            if not line and stdout.channel.recv_exit_status() != -1:
+                break
+            if line:
+                line = line.strip()
+                output_lines.append(line)
+                if line.startswith("PROGRESS:"):
+                    self.logger.info(f"[登录服务器] 📥 {line}")
+                elif line.startswith("ERROR:"):
+                    self.logger.error(f"[登录服务器] ❌ {line}")
+                elif line.startswith("SUCCESS:"):
+                    self.logger.info(f"[登录服务器] ✅ {line}")
+
         exit_code = stdout.channel.recv_exit_status()
 
         if exit_code != 0:
             err_output = stderr.read().decode()
             self.logger.error(f"[登录服务器] 下载失败: exit_code={exit_code}")
+            # 打印所有错误输出
+            for line in output_lines:
+                if "ERROR" in line or "error" in line.lower():
+                    self.logger.error(f"[登录服务器] {line}")
             if err_output:
-                self.logger.error(f"[登录服务器] 错误输出: {err_output[:1000]}")
+                self.logger.error(f"[登录服务器] stderr: {err_output[:1000]}")
             return False, None
 
         # 验证文件
