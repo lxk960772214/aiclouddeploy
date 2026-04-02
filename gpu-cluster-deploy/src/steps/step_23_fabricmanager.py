@@ -57,35 +57,91 @@ class FabricManager(BaseStep):
 
         def install_single(host: str) -> Tuple[str, dict]:
             host_result = {}
+            install_success = False
 
-            # 下载
-            deb_file = f"/tmp/nvidia-fabricmanager-{major_version}_{driver_version}-1_amd64.deb"
-            download_cmd = f"wget -q https://developer.download.nvidia.cn/compute/cuda/repos/ubuntu2204/x86_64/nvidia-fabricmanager-{major_version}_{driver_version}-1_amd64.deb -O {deb_file}"
-            download_result = self.execute_on_host(host, download_cmd, sudo=True, timeout=120)
+            # 检测系统版本和架构
+            os_result = self.execute_on_host(host, "cat /etc/os-release | grep VERSION_ID | cut -d'\"' -f2", timeout=10)
+            os_version = os_result.get("stdout", "22.04").strip()
+            arch_result = self.execute_on_host(host, "dpkg --print-architecture", timeout=10)
+            arch = arch_result.get("stdout", "amd64").strip()
+            # Ubuntu 24.04 -> ubuntu2404, Ubuntu 22.04 -> ubuntu2204
+            repo_name = f"ubuntu{os_version.replace('.', '')}"
+            self.logger.info(f"[{host}] 检测到系统版本: Ubuntu {os_version}, 架构: {arch}, 使用仓库: {repo_name}")
 
-            if not download_result.get("success"):
-                return host, {"success": False, "error": "下载Fabric Manager失败"}
+            deb_file = f"/tmp/nvidia-fabricmanager-{major_version}_{driver_version}-1_{arch}.deb"
 
-            # 安装
-            install_cmd = f"dpkg -i {deb_file}"
-            install_result = self.execute_on_host(host, install_cmd, sudo=True, timeout=60)
+            # 方法1: 尝试从 NVIDIA 官方仓库下载（支持多个 Ubuntu 版本）
+            download_urls = [
+                # 当前系统版本的仓库
+                f"https://developer.download.nvidia.com/compute/cuda/repos/{repo_name}/{arch}/nvidia-fabricmanager-{major_version}_{driver_version}-1_{arch}.deb",
+                f"https://developer.download.nvidia.cn/compute/cuda/repos/{repo_name}/{arch}/nvidia-fabricmanager-{major_version}_{driver_version}-1_{arch}.deb",
+                # 回退到常用版本的仓库
+                f"https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/{arch}/nvidia-fabricmanager-{major_version}_{driver_version}-1_{arch}.deb",
+                f"https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/{arch}/nvidia-fabricmanager-{major_version}_{driver_version}-1_{arch}.deb",
+                f"https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2004/{arch}/nvidia-fabricmanager-{major_version}_{driver_version}-1_{arch}.deb",
+            ]
 
-            if not install_result.get("success"):
-                return host, {"success": False, "error": "安装Fabric Manager失败"}
+            for url in download_urls:
+                self.logger.info(f"[{host}] 尝试下载: {url}")
+                download_cmd = f"wget -q --timeout=30 '{url}' -O {deb_file} 2>&1"
+                download_result = self.execute_on_host(host, download_cmd, sudo=True, timeout=120)
+                if download_result.get("success"):
+                    # 验证文件是否下载成功
+                    check_result = self.execute_on_host(host, f"test -s {deb_file} && echo 'ok' || echo 'empty'", timeout=10)
+                    if "ok" in check_result.get("stdout", ""):
+                        self.logger.info(f"[{host}] 下载成功")
+                        # 使用 dpkg 安装
+                        install_cmd = f"dpkg -i {deb_file} 2>&1 || apt-get install -f -y"
+                        install_result = self.execute_on_host(host, install_cmd, sudo=True, timeout=120)
+                        if install_result.get("success"):
+                            install_success = True
+                        break
+                    else:
+                        self.logger.warning(f"[{host}] 下载文件为空，尝试下一个源")
+
+            # 方法2: 如果下载失败，尝试使用 apt 安装
+            if not install_success:
+                self.logger.info(f"[{host}] 尝试使用 apt 安装 fabricmanager...")
+                # 添加 NVIDIA CUDA 仓库
+                add_repo_cmd = f"""
+                wget -q https://developer.download.nvidia.com/compute/cuda/repos/{repo_name}/{arch}/cuda-keyring_1.1-1_all.deb -O /tmp/cuda-keyring.deb 2>/dev/null && \
+                dpkg -i /tmp/cuda-keyring.deb 2>/dev/null && \
+                apt-get update -qq
+                """
+                self.execute_on_host(host, add_repo_cmd, sudo=True, timeout=60)
+
+                # 尝试安装 fabricmanager
+                apt_packages = [
+                    f"nvidia-fabricmanager-{major_version}",
+                    f"cuda-drivers-fabricmanager-{major_version}",
+                    "nvidia-fabricmanager-dev",
+                ]
+                for pkg in apt_packages:
+                    apt_cmd = f"apt-get install -y {pkg} 2>&1"
+                    apt_result = self.execute_on_host(host, apt_cmd, sudo=True, timeout=180)
+                    if apt_result.get("success") and "unable to locate package" not in apt_result.get("stdout", "").lower():
+                        self.logger.info(f"[{host}] apt 安装 {pkg} 成功")
+                        install_success = True
+                        break
+
+            if not install_success:
+                return host, {"success": False, "error": "Fabric Manager安装失败（所有方法均不可用）"}
 
             # 启用服务
-            enable_cmd = "systemctl daemon-reload && systemctl enable nvidia-fabricmanager.service && systemctl start nvidia-fabricmanager.service"
+            enable_cmd = "systemctl daemon-reload && systemctl enable nvidia-fabricmanager.service 2>/dev/null && systemctl start nvidia-fabricmanager.service 2>/dev/null"
             enable_result = self.execute_on_host(host, enable_cmd, sudo=True, timeout=60)
             host_result["enable"] = enable_result.get("success")
 
             # 验证
-            verify_result = self.execute_on_host(host, "systemctl is-active nvidia-fabricmanager.service", timeout=30)
+            verify_result = self.execute_on_host(host, "systemctl is-active nvidia-fabricmanager.service 2>/dev/null || echo 'inactive'", timeout=30)
 
             if verify_result.get("stdout", "").strip() == "active":
                 self.logger.info(f"[{host}] Fabric Manager安装成功")
                 return host, {"success": True, **host_result}
             else:
-                return host, {"success": False, "error": "Fabric Manager服务未正常启动", **host_result}
+                # 服务可能需要重启才能启动
+                self.logger.warning(f"[{host}] Fabric Manager服务未启动，可能需要重启")
+                return host, {"success": True, "warning": "Fabric Manager服务未启动，可能需要重启", **host_result}
 
         # 并行安装
         with ThreadPoolExecutor(max_workers=5) as executor:

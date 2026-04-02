@@ -216,16 +216,28 @@ echo "UNINSTALL_DONE"
                 return host, {"success": False, "error": f"MLNX_OFED安装文件不存在: {driver_file}"}
 
             # 解压驱动
-            extract_dir = "/tmp/mlnx_ofed"
-            extract_cmd = f"rm -rf {extract_dir} && mkdir -p {extract_dir} && tar -xzf {driver_file} -C {extract_dir} --strip-components=1"
+            # MLNX_OFED tar包结构: MLNX_OFED_LINUX-xxx/mlnxofedinstall
+            # 解压后需要找到正确的子目录
+            extract_base = "/tmp/mlnx_ofed"
+            extract_cmd = f"rm -rf {extract_base} && mkdir -p {extract_base} && tar -xzf {driver_file} -C {extract_base}"
             extract_result = self.execute_on_host(host, extract_cmd, sudo=True, timeout=120)
 
             if not extract_result.get("success"):
                 return host, {"success": False, "error": "解压驱动失败"}
 
+            # 查找解压后的实际目录（tar包内包含一个子目录）
+            find_dir_cmd = f"find {extract_base} -name 'mlnxofedinstall' -type f 2>/dev/null | head -1 | xargs dirname"
+            find_result = self.execute_on_host(host, find_dir_cmd, timeout=30)
+            actual_dir = find_result.get("stdout", "").strip()
+
+            if not actual_dir:
+                return host, {"success": False, "error": "找不到mlnxofedinstall脚本"}
+
+            self.logger.info(f"[{host}] 找到安装目录: {actual_dir}")
+
             # 安装驱动
             self.logger.info(f"[{host}] 执行MLNX_OFED安装...")
-            install_cmd = f"cd {extract_dir} && ./mlnxofedinstall --add-kernel-support --skip-distro-check --force --enable-opensm"
+            install_cmd = f"cd {actual_dir} && ./mlnxofedinstall --add-kernel-support --skip-distro-check --force --enable-opensm"
             install_result = self.execute_on_host(host, install_cmd, sudo=True, timeout=1800)
             host_result["install"] = {"success": install_result.get("success"), "exit_code": install_result.get("exit_code")}
 

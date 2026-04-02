@@ -549,13 +549,12 @@ class PackageManager:
             return False, None
 
         # 通过登录服务器SCP传输到目标节点
+        # 注意：免密配置完成后，直接使用 scp 即可，不需要 sshpass
         try:
             # 注意：不设置传输超时，让传输自然完成
             # ConnectTimeout 只控制连接建立超时，不影响传输过程
-            if password:
-                scp_cmd = f"sshpass -p '{password}' scp -o StrictHostKeyChecking=no -o ConnectTimeout=30 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 {jumphost_path} {username}@{target_host}:{dest_path}"
-            else:
-                scp_cmd = f"scp -o StrictHostKeyChecking=no -o ConnectTimeout=30 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 {jumphost_path} {username}@{target_host}:{dest_path}"
+            # 免密配置完成后，使用普通 scp 即可
+            scp_cmd = f"scp -o StrictHostKeyChecking=no -o ConnectTimeout=30 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 {jumphost_path} {username}@{target_host}:{dest_path}"
 
             self.logger.info(f"[登录服务器] 开始SCP传输: {jumphost_path} -> {target_host}:{dest_path}")
             self.logger.debug(f"[登录服务器] SCP命令: {scp_cmd}")

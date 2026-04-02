@@ -72,6 +72,17 @@ class StorageConfig:
     filesystem: str = "ext4"
     format_disk: bool = False  # 是否格式化磁盘（默认不格式化，防止数据丢失）
 
+    def _validate(self):
+        """验证存储配置"""
+        if self.type == StorageType.SINGLE:
+            if not self.device and not self.devices:
+                raise ValueError("single模式需要指定device或devices")
+        elif self.type in (StorageType.RAID1, StorageType.RAID10):
+            if not self.devices or len(self.devices) < 2:
+                raise ValueError(f"{self.type.value}模式需要至少2个设备")
+            if self.type == StorageType.RAID10 and len(self.devices) < 4:
+                raise ValueError("RAID10模式需要至少4个设备")
+
     def to_dict(self) -> Dict:
         return {
             "type": self.type.value,
@@ -357,6 +368,7 @@ class ClusterConfig:
     name: str = "gpu-cluster"
     description: str = ""
     deploy_user: Optional[str] = None  # 部署用户（可选，默认使用登录用户）
+    create_users: bool = False  # 是否创建ubuntu用户（默认不创建）
     jumphost: Optional[JumphostConfig] = None
     nodes: List[NodeConfig] = field(default_factory=list)
     node_batch: NodeBatchConfig = field(default_factory=NodeBatchConfig)  # 批量节点配置
@@ -415,6 +427,7 @@ class ClusterConfig:
             "name": self.name,
             "description": self.description,
             "deploy_user": self.deploy_user,
+            "create_users": self.create_users,
             "jumphost": self.jumphost.to_dict() if self.jumphost else None,
             "nodes": [node.to_dict() for node in self.nodes],
             "node_batch": self.node_batch.to_dict(),

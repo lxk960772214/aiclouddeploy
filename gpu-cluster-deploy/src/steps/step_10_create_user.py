@@ -45,6 +45,23 @@ class CreateUser(BaseStep):
         """执行用户创建"""
         results = {}
 
+        # 默认不创建ubuntu用户，除非配置中明确指定
+        # 检查是否有配置要求创建用户
+        create_user_enabled = False
+        if self.config and hasattr(self.config, 'create_users'):
+            create_user_enabled = self.config.create_users
+
+        # 如果没有明确要求创建用户，跳过此步骤
+        if not create_user_enabled:
+            self.logger.info("默认不创建ubuntu用户，跳过此步骤（如需创建，请在配置中设置 create_users: true）")
+            return StepResult(
+                step_id=self.step_id,
+                step_name=self.step_name,
+                status=StepStatus.SUCCESS,
+                message="跳过用户创建（默认不创建，如需创建请在配置中设置 create_users: true）",
+                host_results=results
+            )
+
         # 1. 检查用户是否已存在
         check_cmd = "id ubuntu 2>/dev/null && echo 'exists' || echo 'not_exists'"
         check_result = self.execute_batch(hosts, check_cmd, sudo=False)
@@ -53,7 +70,7 @@ class CreateUser(BaseStep):
         already_exists = []
 
         for host, res in check_result.results.items():
-            if res.success and "exists" in res.stdout:
+            if res.success and "exists" in res.stdout and "not_exists" not in res.stdout:
                 already_exists.append(host)
             else:
                 need_create.append(host)

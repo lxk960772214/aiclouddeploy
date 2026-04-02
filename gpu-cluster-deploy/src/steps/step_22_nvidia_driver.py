@@ -186,10 +186,13 @@ done
 # 3. 使用NVIDIA官方卸载工具
 test -f /usr/bin/nvidia-uninstall && /usr/bin/nvidia-uninstall -s || true
 
-# 4. 清理apt安装的NVIDIA包
-apt-get purge -y '*nvidia*' '*libnvidia*' '*cuda*' 2>/dev/null || true
+# 4. 清理处于rc状态的nvidia相关包（避免依赖解析失败）
+dpkg --purge $(dpkg -l | grep -E '^rc.*nvidia|^rc.*linux-modules-nvidia' | awk '{print $2}') 2>/dev/null || true
 
-# 5. 清理残留文件
+# 5. 清理apt安装的NVIDIA包
+apt-get purge -y 'nvidia*' 'libnvidia*' 'cuda*' 2>/dev/null || true
+
+# 6. 清理残留文件
 rm -rf /usr/lib/nvidia-* 2>/dev/null || true
 rm -rf /usr/share/nvidia/ 2>/dev/null || true
 rm -rf /var/log/nvidia* 2>/dev/null || true
@@ -201,15 +204,15 @@ rm -f /etc/init.d/nvidia* 2>/dev/null || true
 rm -f /etc/systemd/system/nvidia*.service 2>/dev/null || true
 rm -f /lib/udev/rules.d/*nvidia*.rules 2>/dev/null || true
 
-# 6. 清理DKMS模块
+# 7. 清理DKMS模块
 for v in $(dkms status nvidia 2>/dev/null | awk '{print $2}'); do
     dkms remove nvidia/$v --all 2>/dev/null || true
 done
 
-# 7. 自动清理
+# 8. 自动清理
 apt-get autoremove -y 2>/dev/null || true
 
-# 8. 验证卸载
+# 9. 验证卸载
 lsmod | grep nvidia || echo "UNINSTALL_DONE"
 '''
 

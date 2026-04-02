@@ -662,13 +662,10 @@ class SSHManager:
                     logger.info(f"跳转服务器文件状态: {ls_output}")
 
                     # 从跳转服务器传输到目标主机
-                    # 使用 sshpass + scp 命令（如果有密码）
+                    # 免密配置完成后，直接使用 scp 即可，不需要 sshpass
                     # 注意：不设置传输超时，让传输自然完成
                     # ServerAliveInterval 保持连接活跃，避免因空闲断开
-                    if password:
-                        scp_cmd = f"sshpass -p '{password}' scp -o StrictHostKeyChecking=no -o ConnectTimeout=30 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 {jump_temp_path} {username}@{host}:{remote_path}"
-                    else:
-                        scp_cmd = f"scp -o StrictHostKeyChecking=no -o ConnectTimeout=30 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 {jump_temp_path} {username}@{host}:{remote_path}"
+                    scp_cmd = f"scp -o StrictHostKeyChecking=no -o ConnectTimeout=30 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 {jump_temp_path} {username}@{host}:{remote_path}"
                     logger.info(f"开始 SCP 传输: {jump_temp_path} -> {host}:{remote_path}")
                     logger.debug(f"执行 SCP: {scp_cmd}")
                     # exec_command 的 timeout=None 表示不设置超时，让传输自然完成

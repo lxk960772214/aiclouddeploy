@@ -118,15 +118,18 @@ class CUDAToolkit(BaseStep):
 # 1. 运行CUDA卸载工具（如果存在）
 test -f /usr/local/cuda/bin/cuda-uninstaller && /usr/local/cuda/bin/cuda-uninstaller -s || true
 
-# 2. 清理apt安装的CUDA包
-apt-get purge -y '*cuda*' '*libcuda*' '*nvidia-cuda*' 2>/dev/null || true
+# 2. 清理处于rc状态的cuda相关包（避免依赖解析失败）
+dpkg --purge $(dpkg -l | grep -E '^rc.*cuda|^rc.*nvidia-cuda' | awk '{print $2}') 2>/dev/null || true
 
-# 3. 清理残留文件
+# 3. 清理apt安装的CUDA包
+apt-get purge -y 'cuda*' 'libcuda*' 'nvidia-cuda*' 2>/dev/null || true
+
+# 4. 清理残留文件
 rm -rf /usr/local/cuda-* 2>/dev/null || true
 rm -rf /usr/local/cuda 2>/dev/null || true
 rm -f /etc/profile.d/cuda.sh 2>/dev/null || true
 
-# 4. 清理环境变量
+# 5. 清理环境变量
 sed -i '/\\/usr\\/local\\/cuda/d' /etc/profile 2>/dev/null || true
 
 echo "UNINSTALL_DONE"
