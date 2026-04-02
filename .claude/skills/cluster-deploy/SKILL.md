@@ -41,13 +41,78 @@ description: GPU集群自动化部署 - 配置生成、预检查、执行、验�
 
 通过 SSH 跳转登录到集群节点，执行环境探测命令:
 
-```bash
-# SSH 跳转连接 (使用 ProxyJump)
-ssh -o ProxyJump="user@jumphost:port" user@node_ip
+#### SSH 跳转连接方式
 
-# 示例
-ssh -o ProxyJump="root@jumphost.example.com:22" root@10.0.0.1
+**前置条件：安装 sshpass（密码认证时需要）**
+```bash
+# Ubuntu/Debian
+sudo apt-get install sshpass
+
+# CentOS/RHEL
+sudo yum install sshpass
 ```
+
+**方式一：免密认证（推荐）**
+```bash
+# 已配置密钥认证时，直接使用 -J 参数
+ssh -J root@jumphost.example.com:1038 root@10.0.0.1
+
+# 或使用 ProxyJump 选项
+ssh -o ProxyJump=root@jumphost.example.com:1038 root@10.0.0.1
+```
+
+**方式二：密码认证 - 跳转和目标密码相同**
+```bash
+# 使用 sshpass 提供密码
+sshpass -p '密码' ssh -J root@jumphost.example.com:1038 -o StrictHostKeyChecking=no root@10.0.0.1
+```
+
+**方式三：密码认证 - 跳转和目标密码不同**
+```bash
+# 外层 sshpass：目标服务器密码
+# 内层 sshpass：跳转服务器密码
+sshpass -p '目标密码' ssh -o ProxyCommand="sshpass -p '跳转密码' ssh -W %h:%p -o StrictHostKeyChecking=no root@jumphost.example.com -p 1038" -o StrictHostKeyChecking=no root@10.0.0.1
+```
+
+**方式四：配置 ~/.ssh/config（长期使用推荐）**
+```bash
+# 编辑 ~/.ssh/config
+Host jumphost
+    HostName jumphost.example.com
+    Port 1038
+    User root
+
+Host gpu-node
+    HostName 10.0.0.1
+    User root
+    ProxyJump jumphost
+
+# 然后可以直接连接（需先配置免密或使用 sshpass）
+ssh gpu-node
+```
+
+#### 部署程序内部连接方式
+
+部署程序使用 **paramiko** 库通过跳转服务器连接，不依赖系统 SSH 命令：
+
+```python
+# 程序内部实现（仅供参考）
+# 1. 先连接跳转服务器
+jump_client.connect(jumphost_host, jumphost_port, jumphost_user, jumphost_password)
+
+# 2. 通过跳转服务器的 transport 打开到目标节点的通道
+transport = jump_client.get_transport()
+channel = transport.open_channel('direct-tcpip', (node_ip, node_port), ('127.0.0.1', 22))
+
+# 3. 通过通道连接目标节点
+node_client.connect(node_ip, node_port, node_user, node_password, sock=channel)
+```
+
+**配置完成后免密连接**：
+部署程序在 Step 0d 配置完 SSH 免密后，后续所有连接都使用密钥认证，不再需要密码：
+- scp 传输文件：`scp file user@host:/path`
+- ssh 执行命令：`ssh user@host "command"`
+- pdsh 批量执行：`pdsh -w hosts "command"`
 
 #### 探测项目
 
