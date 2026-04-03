@@ -100,7 +100,14 @@ chmod +x {script_path}'''
         acs_result = self.execute_on_host(host, "lspci -vvv 2>/dev/null | grep -c 'ACSCtl.*SrcValid+' || echo 0", sudo=True, timeout=60)
 
         if acs_result.get("success"):
-            count = int(acs_result.get("stdout", "0").strip())
+            stdout = acs_result.get("stdout", "0").strip()
+            # 处理多行输出（如 "0\n0"），取第一行或求和
+            try:
+                # 如果是多行，每行代表一个设备的计数，求和
+                lines = [l.strip() for l in stdout.split('\n') if l.strip()]
+                count = sum(int(l) for l in lines if l.isdigit())
+            except ValueError:
+                count = 0
             if count == 0:
                 return True, "ACS已禁用"
             else:

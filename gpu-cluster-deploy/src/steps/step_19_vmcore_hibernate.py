@@ -30,7 +30,9 @@ class VmcoreHibernate(BaseStep):
         sleep_result = self.execute_on_host(host, check_sleep_cmd, sudo=False)
 
         if sleep_result.get("success"):
-            status = sleep_result.get("stdout", "").strip().lower()
+            # 处理多行输出（取第一行）
+            stdout = sleep_result.get("stdout", "").strip()
+            status = stdout.split('\n')[0].strip().lower()
             if status not in ["masked", "disabled", "not-found"]:
                 return False, f"休眠目标未屏蔽（状态: {status}）"
 

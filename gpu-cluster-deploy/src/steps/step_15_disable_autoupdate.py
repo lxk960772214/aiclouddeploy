@@ -30,7 +30,9 @@ class DisableAutoUpdate(BaseStep):
         service_result = self.execute_on_host(host, check_service_cmd, sudo=False)
 
         if service_result.get("success"):
-            status = service_result.get("stdout", "").strip().lower()
+            # 处理多行输出（取第一行）
+            stdout = service_result.get("stdout", "").strip()
+            status = stdout.split('\n')[0].strip().lower()
             if status not in ["disabled", "masked", "not-found"]:
                 return False, f"unattended-upgrades服务未禁用（状态: {status}）"
 

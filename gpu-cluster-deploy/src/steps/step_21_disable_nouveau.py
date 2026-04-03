@@ -27,24 +27,30 @@ class DisableNouveau(BaseStep):
         Returns:
             tuple[bool, str]: (是否已配置, 检查详情)
         """
-        # 1. 检查黑名单配置是否存在
-        check_blacklist_cmd = "grep -q 'blacklist nouveau' /etc/modprobe.d/blacklist.conf 2>/dev/null"
+        # 1. 检查黑名单配置是否存在（可能在任何modprobe.d文件中）
+        check_blacklist_cmd = "grep -rq 'blacklist nouveau' /etc/modprobe.d/ 2>/dev/null && echo 'found' || echo 'not_found'"
         blacklist_result = self.execute_on_host(host, check_blacklist_cmd, sudo=False)
 
-        if not blacklist_result.get("success"):
-            return False, "nouveau黑名单配置不存在"
+        blacklist_exists = blacklist_result.get("stdout", "").strip() == "found"
 
-        # 2. 检查内核模块是否已加载（重启后生效）
+        # 2. 检查内核模块是否已加载
         check_module_cmd = "lsmod | grep -q nouveau && echo 'loaded' || echo 'not_loaded'"
         module_result = self.execute_on_host(host, check_module_cmd, sudo=False)
 
-        if module_result.get("success"):
-            status = module_result.get("stdout", "").strip()
-            if "loaded" in status:
-                # 模块已加载，说明重启后还没生效或配置有问题
-                return False, "nouveau模块仍在加载中（可能需要重启）"
+        module_loaded = module_result.get("stdout", "").strip() == "loaded"
 
-        return True, "nouveau驱动已禁用"
+        # 如果模块未加载，则视为已禁用（无论黑名单是否存在）
+        if not module_loaded:
+            if blacklist_exists:
+                return True, "nouveau驱动已禁用（黑名单已配置，模块未加载）"
+            else:
+                return True, "nouveau驱动已禁用（模块未加载）"
+
+        # 模块已加载但黑名单存在，可能需要重启
+        if blacklist_exists:
+            return False, "nouveau黑名单已配置但模块仍在加载（需要重启）"
+
+        return False, "nouveau黑名单配置不存在"
 
     def execute(self, hosts: List[str]) -> StepResult:
         """执行禁用nouveau驱动"""

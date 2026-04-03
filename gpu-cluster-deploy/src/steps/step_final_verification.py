@@ -596,7 +596,10 @@ class FinalVerification(BaseStep):
                 sudo=False
             )
             try:
-                err_count = int(result.get("stdout", "0").strip())
+                # 处理多行输出（如 "0\n0"），每行代表一次grep结果
+                stdout = result.get("stdout", "0").strip()
+                lines = [l.strip() for l in stdout.split('\n') if l.strip()]
+                err_count = sum(int(l) for l in lines if l.isdigit())
                 if err_count > 0:
                     check_item.host_results[host] = CheckStatus.FAIL
                     check_item.details[host] = f"{err_count} GPU功率异常"
@@ -689,7 +692,10 @@ class FinalVerification(BaseStep):
                 sudo=True
             )
             try:
-                acs_count = int(result.get("stdout", "0").strip())
+                # 处理多行输出（如 "0\n0"），每行代表一个设备的计数
+                stdout = result.get("stdout", "0").strip()
+                lines = [l.strip() for l in stdout.split('\n') if l.strip()]
+                acs_count = sum(int(l) for l in lines if l.isdigit())
                 # ACS应该被禁用（count应该为0）
                 if acs_count == 0:
                     check_item.host_results[host] = CheckStatus.PASS

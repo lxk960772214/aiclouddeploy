@@ -33,11 +33,19 @@ class TimezoneSetup(BaseStep):
                 target_timezone = time_sync.timezone
 
         # 检查当前时区
-        check_cmd = f"timedatectl show --no-pager | grep -o 'Timezone=' | head -1"
+        check_cmd = "timedatectl show --no-pager 2>/dev/null | grep 'Timezone=' || timedatectl 2>/dev/null | grep 'Time zone'"
         result = self.execute_on_host(host, check_cmd, sudo=False)
 
         if result.get("success"):
-            current_tz = result.get("stdout", "").strip()
+            output = result.get("stdout", "").strip()
+            # 解析时区（格式: Timezone=Asia/Shanghai 或 "Time zone: Asia/Shanghai"）
+            if "Timezone=" in output:
+                current_tz = output.split("Timezone=")[-1].strip()
+            elif "Time zone:" in output:
+                current_tz = output.split("Time zone:")[-1].strip().split()[0]
+            else:
+                current_tz = output
+
             if current_tz == target_timezone:
                 return True, f"时区已配置为 {target_timezone}"
             else:
