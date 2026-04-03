@@ -123,11 +123,14 @@ node_client.connect(node_ip, node_port, node_user, node_password, sock=channel)
 | 3 | GPU信息 | `nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv` | GPU型号、数量 |
 | 4 | RDMA设备 | `ibv_devinfo 2>/dev/null \| grep -E "hca_id\|transport\|link_layer"` | 网卡型号、数量 |
 | 5 | 网络接口 | `ip -br addr show` | 网卡名称、状态 |
-| 6 | 磁盘信息 | `lsblk -d -o NAME,SIZE,TYPE \| grep -E "disk\|nvme"` | NVMe设备 |
-| 7 | 已装CUDA | `nvcc --version 2>/dev/null \|\| ls /usr/local/cuda*/version.txt 2>/dev/null` | CUDA状态 |
-| 8 | 已装驱动 | `cat /proc/driver/nvidia/version 2>/dev/null` | 驱动状态 |
-| 9 | MLNX_OFED | `ofed_info -s 2>/dev/null` | OFED状态 |
-| 10 | 内存信息 | `free -h` | 内存容量 |
+| 6 | **管理网IP** | `ip addr show \| grep -E "inet .* (eth\|ens\|bond)" \| grep -v "127.0.0.1"` | 收集管理网内网IP |
+| 7 | 磁盘信息 | `lsblk -d -o NAME,SIZE,TYPE \| grep -E "disk\|nvme"` | NVMe设备 |
+| 8 | **磁盘文件系统** | `lsblk -f -o NAME,FSTYPE,MOUNTPOINT` | 检测磁盘是否有文件系统 |
+| 9 | **系统盘位置** | `df -h / \| tail -1 \| awk '{print $1}'` | 操作系统安装位置 |
+| 10 | 已装CUDA | `nvcc --version 2>/dev/null \|\| ls /usr/local/cuda*/version.txt 2>/dev/null` | CUDA状态 |
+| 11 | 已装驱动 | `cat /proc/driver/nvidia/version 2>/dev/null` | 驱动状态 |
+| 12 | MLNX_OFED | `ofed_info -s 2>/dev/null` | OFED状态 |
+| 13 | 内存信息 | `free -h` | 内存容量 |
 
 #### 环境探测脚本
 
@@ -151,8 +154,31 @@ echo "=== 网络接口 ==="
 ip -br addr show | grep -v "lo\|DOWN"
 
 echo ""
-echo "=== NVMe磁盘 ==="
+echo "=== 管理网IP ==="
+# 收集所有有IP的网卡（通常是管理网，可能是25G、1G、10G或100G）
+echo "--- 所有网卡IP ---"
+ip -o addr show | grep -v "127.0.0.1\|::1" | while read line; do
+    iface=$(echo "$line" | awk '{print $2}')
+    ip_info=$(echo "$line" | awk '{print $4}')
+    speed=$(ethtool $iface 2>/dev/null | grep Speed | awk '{print $2}')
+    echo "$iface: $ip_info ($speed)"
+done
+
+echo ""
+echo "=== 磁盘信息 ==="
+echo "--- 磁盘设备 ---"
 lsblk -d -o NAME,SIZE,TYPE | grep -E "nvme|disk"
+
+echo ""
+echo "--- 磁盘文件系统 ---"
+lsblk -f -o NAME,FSTYPE,MOUNTPOINT,SIZE
+
+echo ""
+echo "--- 系统盘位置 ---"
+ROOT_DISK=$(df -h / | tail -1 | awk '{print $1}')
+echo "系统根分区: $ROOT_DISK"
+ROOT_DEVICE=$(lsblk -no PKNAME $ROOT_DISK 2>/dev/null || echo "$ROOT_DISK" | sed 's/[0-9]*$//')
+echo "系统所在磁盘: /dev/$ROOT_DEVICE"
 
 echo ""
 echo "=== 内存 ==="
@@ -178,8 +204,101 @@ echo "OFED: $(ofed_info -s 2>/dev/null || echo '未安装')"
 | GPU已安装驱动 | 检查版本兼容性，决定是否升级 |
 | RDMA设备数量 | 自动填充 network.compute.rdma_devices |
 | NVMe设备列表 | 自动填充 nodes[].storage.devices |
+| **管理网IP列表** | 用于填写 nodes[].ip |
+| **磁盘已有文件系统** | 提示用户，避免误格式化数据盘 |
+| **系统盘位置** | 排除系统盘，防止误操作导致系统崩溃 |
 | 已有CUDA | 检查版本，决定是否重新安装 |
 | 内核版本 | 判断 MLNX_OFED 兼容性 |
+
+#### Jumphost 选择和角色分配规则
+
+**探测阶段必须收集所有机器的管理网内网IP**：
+- 管理网IP通常是25G网卡，但也可能是1G、10G或100G有IP的网卡
+- 如果不确定哪张网卡是管理网，需要向用户确认
+- 记录格式：`hostname: 管理网IP, GPU数量, 其他信息`
+
+**Jumphost 选择规则**：
+1. 如果用户提供多台有公网IP的机器，选择**第一台有公网IP的机器**作为 jumphost
+2. 如果 jumphost 有 GPU，则这台机器**同时是 gpu-node**
+3. 如果 jumphost 没有 GPU，则是**纯 jumphost**（不加入 nodes 列表）
+
+**角色分配规则**：
+| 条件 | 分配角色 |
+|------|----------|
+| jumphost 有 GPU | `gpu_node` + 可选的 `time_server` |
+| jumphost 无 GPU | 纯 jumphost（不分配角色） |
+| 其他机器有 GPU | `gpu_node` |
+| 作为 NFS 服务器 | `nfs_server` |
+| 作为时间服务器 | `time_server`（通常选第一台 gpu_node） |
+
+**配置文件生成流程**：
+1. 收集所有机器的管理网IP
+2. 根据用户提供的公网IP列表，确定 jumphost
+3. 检测每台机器的 GPU 数量
+4. 为每台机器分配角色：
+   - jumphost 有GPU → 加入 nodes 列表，角色 `gpu_node` + `time_server`
+   - jumphost 无GPU → 不加入 nodes 列表，纯跳板机
+   - 其他有GPU的机器 → 角色 `gpu_node`
+5. 生成 cluster.yaml 配置文件
+
+**磁盘安全检查流程**：
+
+在配置 `nodes[].storage` 之前，必须检查：
+
+1. **识别系统盘**：
+   ```bash
+   # 获取系统根分区所在磁盘
+   ROOT_DISK=$(df -h / | tail -1 | awk '{print $1}')
+   ROOT_DEVICE=$(lsblk -no PKNAME $ROOT_DISK 2>/dev/null)
+   echo "系统盘: /dev/$ROOT_DEVICE"
+   ```
+
+2. **检查磁盘是否已有文件系统**：
+   ```bash
+   # 检查所有块设备的文件系统
+   lsblk -f -o NAME,FSTYPE,MOUNTPOINT,SIZE
+   ```
+
+3. **安全规则**：
+   - 系统盘（包含 `/` 分区的磁盘）**禁止**作为 `storage.devices` 配置
+   - 已有文件系统且挂载的磁盘，默认 `format_disk: false`
+   - 未格式化的磁盘可以安全配置
+
+**磁盘探测输出示例**：
+```
+=== 磁盘信息 ===
+--- 磁盘设备 ---
+NAME    SIZE TYPE
+sda     480G disk
+nvme0n1 3.5T nvme
+nvme1n1 3.5T nvme
+
+--- 磁盘文件系统 ---
+NAME    FSTYPE   MOUNTPOINT  SIZE
+sda                         480G
+├─sda1  ext4     /           480G
+nvme0n1                       3.5T
+nvme1n1                       3.5T
+
+--- 系统盘位置 ---
+系统根分区: /dev/sda1
+系统所在磁盘: /dev/sda
+```
+
+**配置示例（排除系统盘）**：
+```yaml
+nodes:
+  - hostname: "gpu-node-01"
+    ip: "10.0.0.1"
+    storage:
+      type: "raid10"
+      devices:
+        - "/dev/nvme0n1"  # 数据盘
+        - "/dev/nvme1n1"  # 数据盘
+        # 注意：/dev/sda 是系统盘，不参与RAID
+      mount_point: "/ssd"
+      format_disk: false  # 安全默认值
+```
 
 ### 3. 自动写配置文件 → 用户确认
 
@@ -198,13 +317,15 @@ echo "OFED: $(ofed_info -s 2>/dev/null || echo '未安装')"
 | 1 | **登录用户** | `nodes[].username` | 用于SSH连接节点的用户（必须指定） | ⚠️ 中 |
 | 2 | **登录认证方式** | `nodes[].password` / `nodes[].private_key` | 密码或密钥认证 | ⚠️ 中 |
 | 3 | **部署用户** | `cluster.deploy_user` | 部署过程中使用的目标用户（可选，默认使用登录用户） | ⚠️ 中 |
-| 4 | **NVMe磁盘是否格式化** | `nodes[].storage.format_disk` | **默认 false**，设为 true 会清除磁盘数据 | 🔴 高危 |
-| 5 | **RAID级别** | `nodes[].storage.type` | single / raid1 / raid10，影响磁盘配置 | 🔴 高危 |
-| 6 | **RAID设备列表** | `nodes[].storage.devices` | 参与RAID的磁盘设备列表 | 🔴 高危 |
-| 7 | **NFS是否启用** | `nfs.enabled` | 是否配置NFS服务 | ⚠️ 中 |
-| 8 | **NFS服务器** | `nfs.server` | NFS服务器节点 | ⚠️ 中 |
-| 9 | **软件版本** | `versions.yaml` | CUDA、Driver、MLNX_OFED版本 | ⚠️ 中 |
-| 10 | **内核模式** | `kernel.mode` | keep（保持）/ specify（指定版本） | ⚠️ 中 |
+| 4 | **系统盘识别** | 环境探测结果 | 确认系统盘位置，**禁止配置为数据盘** | 🔴 高危 |
+| 5 | **现有文件系统** | 环境探测结果 | 检查磁盘是否已有数据，避免误格式化 | 🔴 高危 |
+| 6 | **NVMe磁盘是否格式化** | `nodes[].storage.format_disk` | **默认 false**，设为 true 会清除磁盘数据 | 🔴 高危 |
+| 7 | **RAID级别** | `nodes[].storage.type` | single / raid1 / raid10，影响磁盘配置 | 🔴 高危 |
+| 8 | **RAID设备列表** | `nodes[].storage.devices` | 参与RAID的磁盘设备列表（排除系统盘） | 🔴 高危 |
+| 9 | **NFS是否启用** | `nfs.enabled` | 是否配置NFS服务 | ⚠️ 中 |
+| 10 | **NFS服务器** | `nfs.server` | NFS服务器节点 | ⚠️ 中 |
+| 11 | **软件版本** | `versions.yaml` | CUDA、Driver、MLNX_OFED版本 | ⚠️ 中 |
+| 12 | **内核模式** | `kernel.mode` | keep（保持）/ specify（指定版本） | ⚠️ 中 |
 
 #### 高危操作特别说明
 
