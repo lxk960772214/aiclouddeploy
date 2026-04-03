@@ -82,6 +82,9 @@ class PackageConfig:
 class PackageDownloader:
     """安装包下载器"""
 
+    # 临时文件后缀
+    TEMP_SUFFIX = ".downloading"
+
     def __init__(self, cache_dir: str = "/tmp/gpu-deploy/cache"):
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
@@ -123,10 +126,13 @@ class PackageDownloader:
         Returns:
             bool: 是否下载成功
         """
+        # 使用临时文件下载，完成后重命名
+        temp_dest = Path(str(dest) + self.TEMP_SUFFIX)
+
         # 不设置wget自身的timeout，完全由监控脚本控制
         cmd = [
             "wget", "-c",  # 断点续传
-            "-O", str(dest),
+            "-O", str(temp_dest),
             "--timeout=0",    # 禁用wget自身超时，由监控控制
             "--tries=0",      # 无限重试（由我们的监控控制）
             url
@@ -151,12 +157,15 @@ class PackageDownloader:
                     logger.error(f"   URL: {url}")
                     logger.error(f"   文件: {dest}")
                     logger.error(f"   已下载: {last_size / 1024 / 1024:.2f} MB")
+                    # 清理临时文件
+                    if temp_dest.exists():
+                        temp_dest.unlink()
                     return False
 
                 # 检查文件大小
                 try:
-                    if dest.exists():
-                        current_size = dest.stat().st_size
+                    if temp_dest.exists():
+                        current_size = temp_dest.stat().st_size
                         if current_size > last_size:
                             last_size = current_size
                             last_progress_time = current_time
@@ -172,6 +181,9 @@ class PackageDownloader:
                             logger.error(f"   文件: {dest}")
                             logger.error(f"   已下载: {last_size / 1024 / 1024:.2f} MB")
                             logger.error(f"   建议: 检查网络连接或使用其他下载源")
+                            # 清理临时文件
+                            if temp_dest.exists():
+                                temp_dest.unlink()
                             return False
                 except Exception as e:
                     logger.debug(f"检查文件大小失败: {e}")
@@ -185,15 +197,29 @@ class PackageDownloader:
                 logger.error(f"❌ wget 下载失败: returncode={returncode}")
                 if stderr:
                     logger.error(f"   错误信息: {stderr[:500]}")
+                # 清理临时文件
+                if temp_dest.exists():
+                    temp_dest.unlink()
                 return False
 
-            logger.info(f"✅ 下载完成: {dest} ({last_size / 1024 / 1024:.2f} MB)")
-            return True
+            # 下载成功，重命名临时文件为目标文件
+            try:
+                temp_dest.rename(dest)
+                logger.info(f"✅ 下载完成: {dest} ({last_size / 1024 / 1024:.2f} MB)")
+                return True
+            except Exception as e:
+                logger.error(f"❌ 重命名临时文件失败: {e}")
+                if temp_dest.exists():
+                    temp_dest.unlink()
+                return False
 
         except Exception as e:
             logger.error(f"❌ 下载失败: {e}")
             logger.error(f"   URL: {url}")
             logger.error(f"   文件: {dest}")
+            # 清理临时文件
+            if temp_dest.exists():
+                temp_dest.unlink()
             return False
 
     def download_with_curl(self, url: str, dest: Path, timeout: int = 7200, stall_timeout: int = 300) -> bool:
@@ -209,11 +235,14 @@ class PackageDownloader:
         Returns:
             bool: 是否下载成功
         """
+        # 使用临时文件下载，完成后重命名
+        temp_dest = Path(str(dest) + self.TEMP_SUFFIX)
+
         # 不设置curl的max-time，只设置连接超时
         cmd = [
             "curl", "-L",  # 跟随重定向
             "-C", "-",  # 断点续传
-            "-o", str(dest),
+            "-o", str(temp_dest),
             "--connect-timeout", "60",  # 仅连接超时60秒
             "--retry", "0",  # 由我们的监控控制重试
             "-f",  # 失败时返回错误码
@@ -239,12 +268,15 @@ class PackageDownloader:
                     logger.error(f"   URL: {url}")
                     logger.error(f"   文件: {dest}")
                     logger.error(f"   已下载: {last_size / 1024 / 1024:.2f} MB")
+                    # 清理临时文件
+                    if temp_dest.exists():
+                        temp_dest.unlink()
                     return False
 
                 # 检查文件大小
                 try:
-                    if dest.exists():
-                        current_size = dest.stat().st_size
+                    if temp_dest.exists():
+                        current_size = temp_dest.stat().st_size
                         if current_size > last_size:
                             last_size = current_size
                             last_progress_time = current_time
@@ -257,6 +289,9 @@ class PackageDownloader:
                             logger.error(f"   文件: {dest}")
                             logger.error(f"   已下载: {last_size / 1024 / 1024:.2f} MB")
                             logger.error(f"   建议: 检查网络连接或使用其他下载源")
+                            # 清理临时文件
+                            if temp_dest.exists():
+                                temp_dest.unlink()
                             return False
                 except Exception as e:
                     logger.debug(f"检查文件大小失败: {e}")
@@ -270,21 +305,50 @@ class PackageDownloader:
                 logger.error(f"❌ curl 下载失败: returncode={returncode}")
                 if stderr:
                     logger.error(f"   错误信息: {stderr[:500]}")
+                # 清理临时文件
+                if temp_dest.exists():
+                    temp_dest.unlink()
                 return False
 
-            logger.info(f"✅ 下载完成: {dest} ({last_size / 1024 / 1024:.2f} MB)")
-            return True
+            # 下载成功，重命名临时文件为目标文件
+            try:
+                temp_dest.rename(dest)
+                logger.info(f"✅ 下载完成: {dest} ({last_size / 1024 / 1024:.2f} MB)")
+                return True
+            except Exception as e:
+                logger.error(f"❌ 重命名临时文件失败: {e}")
+                if temp_dest.exists():
+                    temp_dest.unlink()
+                return False
 
         except Exception as e:
             logger.error(f"❌ 下载失败: {e}")
             logger.error(f"   URL: {url}")
             logger.error(f"   文件: {dest}")
+            # 清理临时文件
+            if temp_dest.exists():
+                temp_dest.unlink()
             return False
 
     def download(self, url: str, dest: Path, timeout: int = 3600) -> bool:
-        """下载文件（自动选择工具）"""
+        """下载文件（自动选择工具）
+
+        使用临时文件机制：
+        1. 先下载到 <filename>.downloading 临时文件
+        2. 下载完成后重命名为目标文件
+        3. 如果存在临时文件，说明上次下载未完成，会自动清理后重新下载
+        """
         logger.info(f"开始下载: {url}")
         logger.info(f"目标路径: {dest}")
+
+        # 检查并清理可能存在的临时文件（上次未完成的下载）
+        temp_dest = Path(str(dest) + self.TEMP_SUFFIX)
+        if temp_dest.exists():
+            logger.warning(f"检测到未完成的下载临时文件，将清理后重新下载: {temp_dest}")
+            try:
+                temp_dest.unlink()
+            except Exception as e:
+                logger.error(f"清理临时文件失败: {e}")
 
         # 确保目标目录存在
         try:
@@ -330,6 +394,9 @@ class PackageDownloader:
             logger.info(f"下载完成: {size_mb:.2f} MB, 耗时 {elapsed:.1f}s, 速度 {speed_mbps:.2f} MB/s")
         else:
             logger.error(f"下载失败: {url}")
+            # 清理可能残留的临时文件
+            if temp_dest.exists():
+                temp_dest.unlink()
             if dest.exists():
                 dest.unlink()
 
@@ -434,24 +501,44 @@ class PackageManager:
             return False
         return jumphost_ip in gpu_hosts
 
-    def _check_file_on_jumphost(self, filepath: str) -> bool:
+    def _check_file_on_jumphost(self, filepath: str, skip_temp: bool = True) -> bool:
         """
         检查登录服务器上文件是否存在
 
         Args:
             filepath: 登录服务器上的文件路径
+            skip_temp: 是否跳过临时文件（只有正式文件才算存在）
 
         Returns:
             bool: 文件是否存在
         """
         if not self.ssh_manager or not self.ssh_manager.jump_client:
             # 没有跳转服务器，程序在登录服务器上运行
+            if skip_temp:
+                # 只有正式文件存在才算存在，临时文件不算
+                return Path(filepath).exists() and not Path(str(filepath) + self.TEMP_SUFFIX).exists()
             return Path(filepath).exists()
 
+        # 检查正式文件
         check_cmd = f"test -f {filepath} && echo 'exists' || echo 'not_found'"
         stdin, stdout, stderr = self.ssh_manager.jump_client.exec_command(check_cmd)
         result = stdout.read().decode().strip()
-        return result == "exists"
+
+        if result != "exists":
+            return False
+
+        # 如果需要跳过临时文件，检查是否存在临时文件
+        if skip_temp:
+            temp_path = filepath + self.TEMP_SUFFIX
+            check_temp_cmd = f"test -f {temp_path} && echo 'has_temp' || echo 'no_temp'"
+            stdin, stdout, stderr = self.ssh_manager.jump_client.exec_command(check_temp_cmd)
+            temp_result = stdout.read().decode().strip()
+            # 如果存在临时文件，说明上次下载可能中断，不算完成
+            if temp_result == "has_temp":
+                self.logger.warning(f"[登录服务器] 检测到未完成的下载临时文件: {temp_path}")
+                return False
+
+        return True
 
     def _download_on_jumphost(self, package: PackageConfig) -> tuple:
         """
@@ -515,23 +602,37 @@ class PackageManager:
             return False, None
 
         # 创建下载监控脚本（在登录服务器上执行）
-        # 监控文件增长，只有长时间不增长才超时
+        # 使用临时文件机制：先下载到 .downloading 文件，完成后重命名
         stall_timeout = 300  # 5分钟无增长则超时
+        temp_path = f"{jumphost_path}.downloading"
         monitor_script = f'''
 set -e
 
 DEST_FILE="{jumphost_path}"
+TEMP_FILE="{temp_path}"
 URL="{package.download_url}"
 STALL_TIMEOUT={stall_timeout}
 
-# 启动下载（不设置超时，由监控脚本控制）
+# 检查并清理可能存在的临时文件（上次未完成的下载）
+if [ -f "$TEMP_FILE" ]; then
+    echo "WARN: 检测到未完成的下载临时文件，清理后重新下载"
+    rm -f "$TEMP_FILE"
+fi
+
+# 如果目标文件已存在，跳过下载
+if [ -f "$DEST_FILE" ] && [ -s "$DEST_FILE" ]; then
+    echo "SUCCESS: 文件已存在，跳过下载"
+    exit 0
+fi
+
+# 启动下载到临时文件（不设置超时，由监控脚本控制）
 # wget: --timeout=0 表示不超时，或设置很大的值
 # curl: 不设置 --max-time，让下载自然进行
 if [ "{has_wget}" = "True" ] || [ "{has_wget}" = "wget" ]; then
     # 不设置timeout，让监控脚本控制超时
-    wget -c -O "$DEST_FILE" --timeout=0 --tries=0 "$URL" 2>/dev/null &
+    wget -c -O "$TEMP_FILE" --timeout=0 --tries=0 "$URL" 2>/dev/null &
 else
-    curl -L -C - -o "$DEST_FILE" --connect-timeout 60 --retry 0 -f "$URL" 2>/dev/null &
+    curl -L -C - -o "$TEMP_FILE" --connect-timeout 60 --retry 0 -f "$URL" 2>/dev/null &
 fi
 DOWNLOAD_PID=$!
 
@@ -541,8 +642,8 @@ LAST_PROGRESS=$(date +%s)
 START_TIME=$(date +%s)
 
 while kill -0 $DOWNLOAD_PID 2>/dev/null; do
-    if [ -f "$DEST_FILE" ]; then
-        CURRENT_SIZE=$(stat -c%s "$DEST_FILE" 2>/dev/null || echo 0)
+    if [ -f "$TEMP_FILE" ]; then
+        CURRENT_SIZE=$(stat -c%s "$TEMP_FILE" 2>/dev/null || echo 0)
         CURRENT_TIME=$(date +%s)
 
         if [ "$CURRENT_SIZE" -gt "$LAST_SIZE" ]; then
@@ -560,6 +661,7 @@ while kill -0 $DOWNLOAD_PID 2>/dev/null; do
                 echo "ERROR: 已下载 $((LAST_SIZE / 1048576)) MB"
                 echo "ERROR: 建议: 检查网络连接或使用其他下载源"
                 kill $DOWNLOAD_PID 2>/dev/null || true
+                rm -f "$TEMP_FILE"
                 exit 1
             fi
         fi
@@ -573,11 +675,21 @@ EXIT_CODE=$?
 
 if [ $EXIT_CODE -ne 0 ]; then
     echo "ERROR: 下载进程退出码: $EXIT_CODE"
+    rm -f "$TEMP_FILE"
     exit 1
 fi
 
-if [ ! -f "$DEST_FILE" ] || [ ! -s "$DEST_FILE" ]; then
-    echo "ERROR: 下载后文件不存在或为空"
+if [ ! -f "$TEMP_FILE" ] || [ ! -s "$TEMP_FILE" ]; then
+    echo "ERROR: 下载后临时文件不存在或为空"
+    rm -f "$TEMP_FILE"
+    exit 1
+fi
+
+# 下载成功，重命名临时文件为目标文件
+mv "$TEMP_FILE" "$DEST_FILE"
+if [ $? -ne 0 ]; then
+    echo "ERROR: 重命名临时文件失败"
+    rm -f "$TEMP_FILE"
     exit 1
 fi
 
