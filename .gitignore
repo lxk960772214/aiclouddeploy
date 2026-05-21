@@ -16,6 +16,7 @@ ENV/
 gpu-cluster-deploy/logs/
 *.log
 *.jsonl
+logs/
 
 # IDE
 .idea/
