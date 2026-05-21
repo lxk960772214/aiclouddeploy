@@ -415,6 +415,9 @@ class PackageManager:
     - 智能跳过: 登录服务器同时是GPU节点时跳过本机传输
     """
 
+    # 临时文件后缀
+    TEMP_SUFFIX = ".downloading"
+
     def __init__(self,
                  cache_dir: str = "/tmp/gpu-deploy/cache",
                  ssh_manager=None,

@@ -90,7 +90,17 @@ class DiskMount(BaseStep):
             self.execute_on_host(host, umount_cmd, sudo=True)
 
         # 7. 添加到fstab
-        fstab_entry = f"{uuid} {mount_point} {filesystem} defaults,nofail 0 0" if format_disk or uuid != device else f"{device} {mount_point} {filesystem} defaults,nofail 0 0"
+        # 如果uuid是真正的UUID（不是设备路径），需要添加UUID=前缀
+        if uuid and uuid != device and not uuid.startswith('/') and not uuid.startswith('UUID='):
+            fstab_uuid = f"UUID={uuid}"
+        elif uuid and uuid.startswith('UUID='):
+            fstab_uuid = uuid
+        elif uuid and uuid.startswith('/'):
+            fstab_uuid = uuid  # 设备路径直接使用
+        else:
+            fstab_uuid = device  # 回退到设备路径
+
+        fstab_entry = f"{fstab_uuid} {mount_point} {filesystem} defaults,nofail 0 0"
 
         # 检查是否已存在相同的挂载点条目
         check_fstab_mount_cmd = f"grep -E '^[^#]*{mount_point}[[:space:]]' /etc/fstab"
@@ -229,7 +239,17 @@ class DiskMount(BaseStep):
             self.execute_on_host(host, umount_cmd, sudo=True)
 
         # 10. 添加到fstab
-        fstab_entry = f"{uuid} {mount_point} {filesystem} defaults,nofail 0 0" if format_disk or uuid != raid_device else f"{raid_device} {mount_point} {filesystem} defaults,nofail 0 0"
+        # 如果uuid是真正的UUID（不是设备路径），需要添加UUID=前缀
+        if uuid and uuid != raid_device and not uuid.startswith('/') and not uuid.startswith('UUID='):
+            fstab_uuid = f"UUID={uuid}"
+        elif uuid and uuid.startswith('UUID='):
+            fstab_uuid = uuid
+        elif uuid and uuid.startswith('/'):
+            fstab_uuid = uuid  # 设备路径直接使用
+        else:
+            fstab_uuid = raid_device  # 回退到设备路径
+
+        fstab_entry = f"{fstab_uuid} {mount_point} {filesystem} defaults,nofail 0 0"
 
         # 检查是否已存在相同的挂载点条目
         check_fstab_mount_cmd = f"grep -E '^[^#]*{mount_point}[[:space:]]' /etc/fstab"
@@ -362,7 +382,9 @@ class DiskMount(BaseStep):
         # 检查挂载点是否已挂载
         result = self.execute_on_host(host, f"mountpoint -q {mount_point} && echo 'mounted' || echo 'not_mounted'", sudo=False)
 
-        if "mounted" in result.get("stdout", ""):
+        stdout = result.get("stdout", "").strip()
+        # 精确匹配，避免 "mounted" 在 "not_mounted" 中被误判
+        if stdout == "mounted":
             return True, f"{mount_point} 已挂载"
         return False, f"{mount_point} 未挂载"
 

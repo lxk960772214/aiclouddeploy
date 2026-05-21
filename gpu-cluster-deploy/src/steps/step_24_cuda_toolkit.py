@@ -34,20 +34,44 @@ class CUDAToolkit(BaseStep):
         Returns:
             tuple[bool, str]: (是否已配置, 检查详情)
         """
-        # 检查 nvcc 命令
+        cuda_config = self.versions.cuda if hasattr(self, 'versions') and self.versions else None
+
+        # 如果cuda配置的mode为keep，检查是否已有CUDA
+        if cuda_config and getattr(cuda_config, 'mode', 'install') == "keep":
+            result = self.execute_on_host(
+                host, "/usr/local/cuda/bin/nvcc -V 2>/dev/null | grep 'release' | awk '{print $6}'",
+                timeout=30
+            )
+            if result.get("success") and result.get("stdout", "").strip():
+                return True, "CUDA已安装（keep模式）"
+            # keep模式但没有安装，也返回True跳过安装
+            return True, "CUDA未安装但keep模式跳过"
+
+        # 检查 nvcc 命令获取版本
         result = self.execute_on_host(
             host, "/usr/local/cuda/bin/nvcc -V 2>/dev/null | grep 'release' | awk '{print $6}'",
             timeout=30
         )
 
         if result.get("success") and result.get("stdout", "").strip():
-            version = result["stdout"].strip().replace(",", "")
+            stdout = result.get("stdout", "").strip()
+            # 取第一行避免重复输出问题
+            version_line = stdout.split('\n')[0].strip() if stdout else ""
+            version = version_line.replace(",", "")
 
-            # 检查版本是否匹配配置
-            if hasattr(self, 'versions') and self.versions and self.versions.cuda:
-                target_version = self.versions.cuda.version
-                if target_version in version:
-                    return True, f"CUDA已安装: {version}"
+            # 检查版本是否匹配配置的目标版本
+            target_version = getattr(cuda_config, 'version', None) if cuda_config else None
+            if target_version:
+                # 精确匹配版本号
+                if version == target_version or target_version in version:
+                    return True, f"CUDA已安装: {version}（匹配目标版本）"
+                # 检查主版本是否匹配
+                target_major = target_version.split('.')[0]
+                current_major = version.split('.')[0] if version else ""
+                if target_major == current_major:
+                    return True, f"CUDA已安装: {version}（主版本匹配）"
+                else:
+                    return False, f"CUDA版本不匹配: 当前={version}, 目标={target_version}"
 
             return True, f"CUDA已安装: {version}"
 

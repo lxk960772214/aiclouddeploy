@@ -78,20 +78,42 @@ fi
         """
         kernel_config = self.versions.kernel if hasattr(self, 'versions') and self.versions else None
 
-        if not kernel_config or kernel_config.mode == "keep":
-            # 检查是否锁定当前内核版本
-            result = self.execute_on_host(host, "grep 'GRUB_DEFAULT=' /etc/default/grub 2>/dev/null", sudo=False)
-            if result.get("success"):
-                grub_default = result.get("stdout", "").strip()
-                if "Advanced options" in grub_default:
-                    return True, "内核版本已固定"
+        # 如果kernel.mode == "keep"，表示不锁定，直接返回True跳过
+        if kernel_config and getattr(kernel_config, 'mode', 'keep') == "keep":
             return True, "内核模式为keep，无需固定"
 
-        return True, "内核固定检查（跳过）"
+        # 检查GRUB_DEFAULT是否设置了Advanced options
+        result = self.execute_on_host(host, "grep 'GRUB_DEFAULT=' /etc/default/grub 2>/dev/null", sudo=False)
+        if result.get("success"):
+            grub_default = result.get("stdout", "").strip()
+            # 取第一行避免重复输出问题
+            grub_default = grub_default.split('\n')[0].strip() if grub_default else ""
+
+            # 检查是否包含内核版本锁定
+            if "Advanced options" in grub_default:
+                # 进一步检查是否锁定到具体内核版本
+                check_kernel_cmd = "uname -r"
+                kernel_result = self.execute_on_host(host, check_kernel_cmd)
+                current_kernel_version = kernel_result.get("stdout", "").strip()
+
+                if current_kernel_version and current_kernel_version in grub_default:
+                    return True, f"内核已锁定到版本: {current_kernel_version}"
+                else:
+                    return True, "内核锁定配置已设置"
+
+        return False, "内核版本未固定"
 
     def post_check(self, hosts: List[str]) -> bool:
         """验证GRUB配置"""
-        # 简化验证：检查 /etc/default/grub 是否可读，且包含 GRUB_DEFAULT 配置
-        cmd = "grep -E '^GRUB_DEFAULT=' /etc/default/grub"
-        result = self.execute_batch(hosts, cmd, sudo=True)
-        return all(r.success for r in result.results.values())
+        # 检查GRUB_DEFAULT是否包含Advanced options
+        cmd = "grep 'GRUB_DEFAULT=' /etc/default/grub | grep 'Advanced options'"
+        result = self.execute_batch(hosts, cmd, sudo=False)
+
+        # 如果kernel.mode == "keep"，则post_check返回True
+        kernel_config = self.versions.kernel if hasattr(self, 'versions') and self.versions else None
+        if kernel_config and getattr(kernel_config, 'mode', 'keep') == "keep":
+            return True
+
+        # 否则检查是否配置了内核锁定
+        success_count = sum(1 for r in result.results.values() if r.success)
+        return success_count == len(hosts)

@@ -620,13 +620,17 @@ class BatchExecutor:
                 if not conn.put_file(local_path, temp_path):
                     return host, False
 
-                # 移动到目标位置
-                if sudo:
-                    result = conn.execute(f"sudo mv {temp_path} {remote_path}", sudo=True)
-                else:
-                    result = conn.execute(f"mv {temp_path} {remote_path}")
+                # 移动到目标位置（如果目标位置和临时位置不同）
+                if temp_path != remote_path:
+                    if sudo:
+                        result = conn.execute(f"sudo mv {temp_path} {remote_path}", sudo=True)
+                    else:
+                        result = conn.execute(f"mv {temp_path} {remote_path}")
 
-                return host, result.success
+                    return host, result.success
+                else:
+                    # 目标位置和临时位置相同，上传即完成
+                    return host, True
             except Exception as e:
                 logger.error(f"复制文件到 {host} 失败: {e}")
                 return host, False

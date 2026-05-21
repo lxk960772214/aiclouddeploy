@@ -247,7 +247,7 @@ class SSHKeySetup(BaseStep):
             # 连接跳板机获取公钥
             result = self.ssh_manager.execute_on_jumphost(
                 jumphost.host, jh_port, jh_user, jh_password,
-                "cat ~/.ssh/id_rsa.pub 2>/dev/null || ssh-keygen -t rsa -N '' -f ~/.ssh/id_rsa && cat ~/.ssh/id_rsa.pub"
+                "cat ~/.ssh/id_rsa.pub 2>/dev/null || (ssh-keygen -q -t rsa -N '' -f ~/.ssh/id_rsa && cat ~/.ssh/id_rsa.pub)"
             )
             if result.success and result.stdout.strip():
                 self.logger.info(f"[跳板机] 获取公钥成功")
@@ -331,11 +331,12 @@ class SSHKeySetup(BaseStep):
                     # 确保.ssh目录存在
                     mkdir_cmd = f'mkdir -p {ssh_dir} && chown {username}:{username} {ssh_dir}'
                     self.execute_on_host(host, mkdir_cmd, sudo=True, use_login_user=True)
-                    gen_cmd = f'su - {username} -c "ssh-keygen -t rsa -N \'\' -f {ssh_dir}/id_rsa"'
+                    # 使用 -q 静默模式生成密钥，避免输出 fingerprint 和 randomart
+                    gen_cmd = f'su - {username} -c "ssh-keygen -q -t rsa -N \'\' -f {ssh_dir}/id_rsa"'
                     self.execute_on_host(host, gen_cmd, sudo=True, use_login_user=True)
 
-                # 确保公钥存在
-                ensure_pubkey_cmd = f'test -f {ssh_dir}/id_rsa.pub || ssh-keygen -y -f {ssh_dir}/id_rsa > {ssh_dir}/id_rsa.pub'
+                # 确保公钥存在（从私钥提取），静默模式避免输出额外信息
+                ensure_pubkey_cmd = f'test -f {ssh_dir}/id_rsa.pub || (ssh-keygen -y -f {ssh_dir}/id_rsa 2>/dev/null > {ssh_dir}/id_rsa.pub)'
                 self.execute_on_host(host, ensure_pubkey_cmd, sudo=True, use_login_user=True)
 
                 # 设置权限
@@ -348,11 +349,13 @@ class SSHKeySetup(BaseStep):
             for username in users:
                 ssh_dir = self._get_ssh_dir(username)
 
-                get_pubkey_cmd = f"cat {ssh_dir}/id_rsa.pub 2>/dev/null"
+                # 只获取以ssh-开头的有效公钥行，过滤掉ssh-keygen的输出
+                get_pubkey_cmd = f"grep '^ssh-' {ssh_dir}/id_rsa.pub 2>/dev/null | head -1"
                 result = self.execute_on_host(host, get_pubkey_cmd, sudo=True, use_login_user=True)
                 if result["success"] and result["stdout"].strip():
                     pubkey = result["stdout"].strip()
-                    if pubkey not in all_pubkeys_by_user[username]:
+                    # 验证公钥格式（必须是ssh-rsa或ssh-ed25519开头）
+                    if pubkey.startswith('ssh-') and pubkey not in all_pubkeys_by_user[username]:
                         all_pubkeys_by_user[username].append(pubkey)
 
         # 5. 将公钥分发到所有节点的对应用户
@@ -373,13 +376,22 @@ class SSHKeySetup(BaseStep):
                 mkdir_cmd = f'mkdir -p {ssh_dir} && chown {username}:{username} {ssh_dir} && chmod 700 {ssh_dir}'
                 self.execute_on_host(host, mkdir_cmd, sudo=True, use_login_user=True)
 
-                # 清空并重建authorized_keys
-                self.execute_on_host(host, f'rm -f {ssh_dir}/authorized_keys', sudo=True, use_login_user=True)
+                # 使用临时文件写入，避免重复追加问题
+                # 1. 先创建临时文件
+                temp_auth_keys = f"{ssh_dir}/authorized_keys.tmp"
+                self.execute_on_host(host, f'rm -f {temp_auth_keys}', sudo=True, use_login_user=True)
 
-                # 添加所有同用户的公钥
+                # 2. 写入所有公钥到临时文件（只写入有效的ssh-开头的公钥）
                 for pubkey in all_pubkeys_by_user[username]:
-                    add_cmd = f'echo "{pubkey}" >> {ssh_dir}/authorized_keys'
-                    self.execute_on_host(host, add_cmd, sudo=True, use_login_user=True)
+                    # 验证公钥格式后再写入
+                    if pubkey.startswith('ssh-'):
+                        # 使用printf避免echo的换行问题
+                        add_cmd = f'printf "%s\\n" "{pubkey}" >> {temp_auth_keys}'
+                        self.execute_on_host(host, add_cmd, sudo=True, use_login_user=True)
+
+                # 3. 去重、过滤无效行，并移动到正式文件
+                dedup_cmd = f"grep '^ssh-' {temp_auth_keys} | sort -u > {ssh_dir}/authorized_keys && rm -f {temp_auth_keys}"
+                self.execute_on_host(host, dedup_cmd, sudo=True, use_login_user=True)
 
                 self.execute_on_host(host, f'chown {username}:{username} {ssh_dir}/authorized_keys && chmod 600 {ssh_dir}/authorized_keys', sudo=True, use_login_user=True)
 

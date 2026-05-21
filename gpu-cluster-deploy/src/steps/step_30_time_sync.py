@@ -120,25 +120,50 @@ EOF'''
         Returns:
             tuple[bool, str]: (是否已配置, 检查详情)
         """
+        # 获取时间服务器节点
+        time_server = self.config.time_server_node if self.config else None
+        server_ip = time_server.ip if time_server else None
+
         # 检查 chrony 是否安装和运行
-        result = self.execute_on_host(host, "systemctl is-active chrony 2>/dev/null || echo 'inactive'", timeout=30)
+        result = self.execute_on_host(host, "systemctl is-active chrony 2>/dev/null || true", timeout=30)
 
-        status = result.get("stdout", "").strip()
+        stdout = result.get("stdout", "").strip()
+        # 取第一行避免重复输出问题
+        status = stdout.split('\n')[0].strip() if stdout else ""
 
-        if status == "active":
-            # 检查时间同步状态
-            tracking_result = self.execute_on_host(host, "chronyc tracking 2>/dev/null | grep 'Last offset'", timeout=30)
-            if tracking_result.get("success") and tracking_result.get("stdout", "").strip():
-                return True, "chrony服务运行中"
+        if status != "active":
+            # 检查 chrony 是否安装
+            check_result = self.execute_on_host(host, "which chronyc 2>/dev/null || true", timeout=10)
+            if not check_result.get("stdout", "").strip():
+                return False, "chrony未安装"
+            return False, f"chrony服务状态: {status}"
 
-            return True, "chrony服务已启用"
+        # 检查 chrony 配置是否正确
+        config_result = self.execute_on_host(host, "cat /etc/chrony/chrony.conf 2>/dev/null", timeout=30)
 
-        # 检查 chrony 是否安装
-        check_result = self.execute_on_host(host, "which chronyc 2>/dev/null || echo 'not_installed'", timeout=10)
-        if "not_installed" in check_result.get("stdout", ""):
-            return False, "chrony未安装"
+        if config_result.get("success"):
+            config_content = config_result.get("stdout", "")
 
-        return False, f"chrony服务状态: {status}"
+            # 判断是否是时间服务器节点
+            is_server = (host == server_ip) if server_ip else False
+
+            if is_server:
+                # Server端：检查是否有 local stratum 和 allow all
+                if "local stratum" in config_content and "allow" in config_content:
+                    return True, "时间服务器配置正确"
+                else:
+                    return False, "时间服务器配置不完整（缺少local stratum或allow）"
+            else:
+                # Client端：检查是否有指向server_ip的配置
+                if server_ip and server_ip in config_content:
+                    return True, f"时间客户端配置正确（指向服务器 {server_ip}）"
+                elif server_ip:
+                    return False, f"时间客户端配置不正确（未指向服务器 {server_ip}）"
+                else:
+                    # 没有指定时间服务器，只要chrony运行就认为配置正确
+                    return True, "chrony服务运行中"
+
+        return True, "chrony服务已启用（无法检查配置）"
 
     def post_check(self, hosts: List[str]) -> bool:
         """验证时间同步"""

@@ -71,6 +71,13 @@ STEP_METADATA = {
     "step_0b": {"category": StepCategory.NETWORK, "tags": ["network", "connectivity", "check"]},
     # RDMA network test (step_0c)
     "step_0c": {"category": StepCategory.NETWORK, "tags": ["rdma", "bandwidth", "test"]},
+    # Performance tests (step_40-44)
+    "step_40": {"category": StepCategory.GPU, "tags": ["cublas", "benchmark", "performance"]},
+    "step_41": {"category": StepCategory.GPU, "tags": ["nccl", "single-node", "communication"]},
+    "step_42": {"category": StepCategory.GPU, "tags": ["nccl", "card-pair", "communication"]},
+    "step_43": {"category": StepCategory.SYSTEM, "tags": ["sysbench", "cpu", "performance"]},
+    "step_44": {"category": StepCategory.GPU, "tags": ["gpu-burn", "stability", "performance"]},
+    "step_45": {"category": StepCategory.GPU, "tags": ["nccl", "multi-node", "mpi", "communication"]},
 }
 
 
@@ -142,6 +149,14 @@ from .step_0c_network_rdma_test import NetworkRDMATest
 # Final verification step
 from .step_final_verification import FinalVerification
 
+# Performance test steps
+from .step_40_cublas_bench import CUBLASBenchmark
+from .step_41_nccl_single_node import NCCLSingleNodeTest
+from .step_42_nccl_cardpair import NCCLCardPairTest
+from .step_43_sysbench import SysbenchCPUTest
+from .step_44_gpuburn import GPUBurnTest
+from .step_45_nccl_multinode import NCCLMultiNodeTest
+
 
 # 所有步骤类 - 按依赖顺序排列
 # 重要：
@@ -192,6 +207,13 @@ ALL_STEPS = [
     NFSConfig,
     # Phase 7: 最终验证
     FinalVerification,
+    # Phase 8: 性能测试（可选）
+    CUBLASBenchmark,        # step_40: CUBLAS矩阵乘法测试
+    NCCLSingleNodeTest,     # step_41: NCCL单机多卡测试
+    NCCLCardPairTest,       # step_42: NCCL显卡配对测试
+    SysbenchCPUTest,        # step_43: Sysbench CPU测试
+    GPUBurnTest,            # step_44: GPU Burn稳定性测试
+    NCCLMultiNodeTest,      # step_45: NCCL多节点测试
 ]
 
 # 步骤ID到类的映射
@@ -223,4 +245,6 @@ __all__ = [
     'DisableACS', 'TimeSync', 'NFSConfig',
     # Final verification
     'FinalVerification',
+    # Performance tests
+    'CUBLASBenchmark', 'NCCLSingleNodeTest', 'NCCLCardPairTest', 'SysbenchCPUTest', 'GPUBurnTest', 'NCCLMultiNodeTest',
 ]

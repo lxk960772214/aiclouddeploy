@@ -375,8 +375,8 @@ class GPUClusterDeploy:
                     success = False
                     break
 
-        # 执行最终验证（部署完成后）
-        if success and "99" in self.steps:
+        # 执行最终验证（仅在完整部署时执行）
+        if success and "99" in self.steps and not steps and not phases:
             self.logger.info("\n" + "=" * 60)
             self.logger.info("执行最终验证...")
             self.logger.info("=" * 60)
@@ -424,9 +424,10 @@ class GPUClusterDeploy:
             self.logger.info(f"  - {node.hostname} ({node.ip}) [{roles}]")
 
         self.logger.info("\n软件版本:")
+        mlnx_status = f"{self.versions.mlnx_ofed.version} ({'启用' if self.versions.mlnx_ofed.enabled else '禁用-不安装'})"
         self.logger.info(f"  CUDA: {self.versions.cuda.version}")
         self.logger.info(f"  NVIDIA驱动: {self.versions.nvidia_driver.version}")
-        self.logger.info(f"  MLNX_OFED: {self.versions.mlnx_ofed.version}")
+        self.logger.info(f"  MLNX_OFED: {mlnx_status}")
         self.logger.info(f"  内核模式: {self.versions.kernel.mode}")
 
 

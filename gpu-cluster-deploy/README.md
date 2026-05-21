@@ -1338,6 +1338,12 @@ pytest tests/test_ssh_manager.py::TestSSHManager::test_connect -v
 5. **网络环境** - 确保跳转服务器和内网节点网络可达
 6. **向后兼容** - 新功能保持向后兼容，旧配置文件无需修改
 
+
+## 待办
+
+- chrony 配置
+
+
 ## 许可证
 
 MIT License

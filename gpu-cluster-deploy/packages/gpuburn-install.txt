@@ -1,0 +1,46 @@
+root@k8s-worker13-gpu:~/conf-3.12/toolkit# unzip gpu-burn-master.zip 
+Archive:  gpu-burn-master.zip
+671f4be92477ce01cd9b536bc534a006dbee058f
+   creating: gpu-burn-master/
+  inflating: gpu-burn-master/.clang-format  
+  inflating: gpu-burn-master/.gitignore  
+  inflating: gpu-burn-master/Dockerfile  
+  inflating: gpu-burn-master/LICENSE  
+  inflating: gpu-burn-master/Makefile  
+  inflating: gpu-burn-master/README.md  
+  inflating: gpu-burn-master/compare.cu  
+  inflating: gpu-burn-master/gpu-burn.8  
+  inflating: gpu-burn-master/gpu_burn-drv.cpp  
+root@k8s-worker13-gpu:~/conf-3.12/toolkit# ls
+clash  cublasMatmulBench  gpu-burn-master  gpu-burn-master.zip  mycluster.zip  nccl-master  nccl-master.zip  nccl-tests-master  nccl-tests-master.zip  openmpi-4.1.8.tar.gz
+root@k8s-worker13-gpu:~/conf-3.12/toolkit# cd gpu-burn-master/
+root@k8s-worker13-gpu:~/conf-3.12/toolkit/gpu-burn-master# ls
+compare.cu  Dockerfile  gpu-burn.8  gpu_burn-drv.cpp  LICENSE  Makefile  README.md
+root@k8s-worker13-gpu:~/conf-3.12/toolkit/gpu-burn-master# cp Makefile Makefile_bk
+root@k8s-worker13-gpu:~/conf-3.12/toolkit/gpu-burn-master# vim Makefile
+root@k8s-worker13-gpu:~/conf-3.12/toolkit/gpu-burn-master# which nvcc
+/usr/local/cuda/bin/nvcc
+root@k8s-worker13-gpu:~/conf-3.12/toolkit/gpu-burn-master# vim Makefile
+root@k8s-worker13-gpu:~/conf-3.12/toolkit/gpu-burn-master# nvcc --version
+nvcc: NVIDIA (R) Cuda compiler driver
+Copyright (c) 2005-2025 NVIDIA Corporation
+Built on Wed_Jan_15_19:20:09_PST_2025
+Cuda compilation tools, release 12.8, V12.8.61
+Build cuda_12.8.r12.8/compiler.35404655_0
+root@k8s-worker13-gpu:~/conf-3.12/toolkit/gpu-burn-master# vim Makefile
+root@k8s-worker13-gpu:~/conf-3.12/toolkit/gpu-burn-master# diff Makefile Makefile_bk 
+2c2
+< CUDAPATH ?= /usr/local/cuda
+---
+> CUDAPATH ?= /usr
+29,30c29,30
+< COMPUTE      ?= 90
+< CUDA_VERSION ?= 12.8.0
+---
+> COMPUTE      ?= 75
+> CUDA_VERSION ?= 11.8.0
+root@k8s-worker13-gpu:~/conf-3.12/toolkit/gpu-burn-master# make 
+g++ -O3 -Wno-unused-result -I/usr/local/cuda/include -std=c++11 -DIS_JETSON=false -c gpu_burn-drv.cpp
+PATH="/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin::." /usr/local/cuda/bin/nvcc -I/usr/local/cuda/include -arch=compute_90 -ptx compare.cu -o compare.ptx
+g++ -o gpu_burn gpu_burn-drv.o -O3 -lcuda -L/usr/local/cuda/lib64 -L/usr/local/cuda/lib64/stubs -L/usr/local/cuda/lib -L/usr/local/cuda/lib/stubs -Wl,-rpath=/usr/local/cuda/lib64 -Wl,-rpath=/usr/local/cuda/lib -lcublas -lcudart
+root@k8s-worker13-gpu:~/conf-3.12/toolkit/gpu-burn-master# 

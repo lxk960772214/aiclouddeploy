@@ -146,11 +146,18 @@ class NFSConfig(BaseStep):
         mkdir_cmd = f"mkdir -p {export_path} && chmod -R 777 {export_path}"
         self.execute_on_host(server_ip, mkdir_cmd, sudo=True)
 
-        # 配置exports
+        # 配置exports（避免重复添加）
         client_ips_str = ",".join(client_ips)
         exports_entry = f"{export_path} {client_ips_str}(rw,sync,no_subtree_check)"
-        exports_cmd = f'echo "{exports_entry}" >> /etc/exports'
-        self.execute_on_host(server_ip, exports_cmd, sudo=True)
+        # 先检查是否已存在相同的exports条目
+        check_exports_cmd = f"grep -q '{export_path}' /etc/exports 2>/dev/null && echo 'exists' || echo 'not_exists'"
+        check_result = self.execute_on_host(server_ip, check_exports_cmd, sudo=True)
+
+        if check_result.get("stdout", "").strip() != "exists":
+            exports_cmd = f'echo "{exports_entry}" >> /etc/exports'
+            self.execute_on_host(server_ip, exports_cmd, sudo=True)
+        else:
+            self.logger.info(f"[{server_ip}] exports条目已存在，跳过添加")
 
         # 重启NFS服务
         restart_nfs_cmd = "systemctl restart nfs-server && systemctl enable nfs-server && exportfs -arv"
@@ -245,13 +252,17 @@ class NFSConfig(BaseStep):
         if node and node.hostname == nfs_server.hostname:
             # 服务器端检查
             result = self.execute_on_host(host, "systemctl is-active nfs-server 2>/dev/null || echo 'inactive'", timeout=30)
-            if "active" in result.get("stdout", ""):
+            stdout = result.get("stdout", "").strip()
+            # 精确匹配，避免 "active" 在 "inactive" 中被误判
+            if stdout == "active":
                 return True, "NFS服务器已配置"
             return False, "NFS服务器未运行"
 
         # 客户端检查
         result = self.execute_on_host(host, f"mountpoint -q {client_mount} && echo 'mounted' || echo 'not_mounted'", timeout=30)
-        if "mounted" in result.get("stdout", ""):
+        stdout = result.get("stdout", "").strip()
+        # 精确匹配
+        if stdout == "mounted":
             return True, f"NFS客户端已挂载: {client_mount}"
 
         return False, f"NFS客户端未挂载: {client_mount}"

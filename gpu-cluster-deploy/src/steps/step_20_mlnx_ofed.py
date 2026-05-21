@@ -305,6 +305,18 @@ echo "UNINSTALL_DONE"
         """执行Mellanox驱动安装（批量模式）"""
         results = {}
 
+        # 检查是否启用
+        mlnx_config = self.versions.mlnx_ofed if hasattr(self, 'versions') and self.versions else None
+        if mlnx_config and hasattr(mlnx_config, 'enabled') and not mlnx_config.enabled:
+            self.logger.info("MLNX_OFED 已禁用 (enabled=false)，跳过安装")
+            return StepResult(
+                step_id=self.step_id,
+                step_name=self.step_name,
+                status=StepStatus.SUCCESS,
+                message="MLNX_OFED 已禁用，不安装网卡驱动",
+                host_results={h: {"success": True, "skipped": True, "reason": "disabled"} for h in hosts}
+            )
+
         # 检查是否有 versions 配置
         if not hasattr(self, 'versions') or self.versions is None:
             self.logger.info("未配置版本信息，跳过MLNX_OFED安装")

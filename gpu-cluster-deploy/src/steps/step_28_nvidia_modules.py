@@ -63,11 +63,21 @@ EOF'''
 
         if "configured" in result.get("stdout", ""):
             # 检查 nvidia_peermem 模块是否已加载
-            mod_result = self.execute_on_host(host, "lsmod | grep -c nvidia_peermem || echo 0", timeout=30)
+            # 使用 grep -c 后只取第一行，避免 || echo 0 导致的重复输出
+            mod_result = self.execute_on_host(host, "lsmod | grep -c nvidia_peermem 2>/dev/null || true", timeout=30)
             if mod_result.get("success"):
-                count = int(mod_result.get("stdout", "0").strip())
-                if count > 0:
-                    return True, "NVIDIA内核模块已配置并加载"
+                stdout = mod_result.get("stdout", "0").strip()
+                # 取第一行（避免重复输出问题）
+                first_line = stdout.split('\n')[0].strip() if stdout else "0"
+                try:
+                    count = int(first_line) if first_line else 0
+                    if count > 0:
+                        return True, "NVIDIA内核模块已配置并加载"
+                except ValueError:
+                    # 如果无法解析，尝试检查模块是否存在
+                    check_result = self.execute_on_host(host, "lsmod | grep nvidia_peermem", timeout=30)
+                    if check_result.get("success") and check_result.get("stdout", "").strip():
+                        return True, "NVIDIA内核模块已配置并加载"
             return True, "NVIDIA内核模块配置已创建（需重启加载）"
 
         return False, "NVIDIA内核模块未配置"

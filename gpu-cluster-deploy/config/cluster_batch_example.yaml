@@ -70,6 +70,11 @@ node_batch:
 # 个别节点覆盖配置（新功能）
 # 可以覆盖特定批量节点的配置
 nodes_override:
+  - hostname: "gpu-node-01"
+    roles:
+      - gpu_node
+      - test_compile        # 指定此节点负责编译测试工具（role_based策略）
+
   - hostname: "gpu-node-02"
     storage:
       device: "/dev/nvme1n1"  # 使用不同的设备

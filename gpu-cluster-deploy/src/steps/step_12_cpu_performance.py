@@ -72,8 +72,12 @@ class CPUPerformance(BaseStep):
                 host_results={h: {"success": True, "skipped": True} for h in hosts}
             )
 
-        # 2. 配置cpufrequtils
-        config_cmd = '''echo 'GOVERNOR="performance"' > /etc/default/cpufrequtils'''
+        # 2. 配置cpufrequtils（避免重复添加）
+        config_cmd = '''
+grep -q 'GOVERNOR="performance"' /etc/default/cpufrequtils 2>/dev/null && echo 'already_configured' || {
+    echo 'GOVERNOR="performance"' > /etc/default/cpufrequtils && echo 'configured'
+}
+'''
         config_result = self.execute_batch(hosts, config_cmd, sudo=True)
 
         failed = [h for h, r in config_result.results.items() if not r.success]

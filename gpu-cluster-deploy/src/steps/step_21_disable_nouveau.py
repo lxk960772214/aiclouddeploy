@@ -27,30 +27,36 @@ class DisableNouveau(BaseStep):
         Returns:
             tuple[bool, str]: (是否已配置, 检查详情)
         """
-        # 1. 检查黑名单配置是否存在（可能在任何modprobe.d文件中）
+        # 1. 检查黑名单配置是否存在（必须在modprobe.d中有配置）
         check_blacklist_cmd = "grep -rq 'blacklist nouveau' /etc/modprobe.d/ 2>/dev/null && echo 'found' || echo 'not_found'"
         blacklist_result = self.execute_on_host(host, check_blacklist_cmd, sudo=False)
 
-        blacklist_exists = blacklist_result.get("stdout", "").strip() == "found"
+        stdout = blacklist_result.get("stdout", "").strip()
+        # 取最后一行避免重复输出问题
+        status = stdout.split('\n')[-1].strip() if stdout else "not_found"
+        blacklist_exists = status == "found"
 
         # 2. 检查内核模块是否已加载
         check_module_cmd = "lsmod | grep -q nouveau && echo 'loaded' || echo 'not_loaded'"
         module_result = self.execute_on_host(host, check_module_cmd, sudo=False)
 
-        module_loaded = module_result.get("stdout", "").strip() == "loaded"
+        stdout_module = module_result.get("stdout", "").strip()
+        status_module = stdout_module.split('\n')[-1].strip() if stdout_module else "not_loaded"
+        module_loaded = status_module == "loaded"
 
-        # 如果模块未加载，则视为已禁用（无论黑名单是否存在）
-        if not module_loaded:
-            if blacklist_exists:
-                return True, "nouveau驱动已禁用（黑名单已配置，模块未加载）"
-            else:
-                return True, "nouveau驱动已禁用（模块未加载）"
+        # 必须同时满足：黑名单配置存在 + 模块未加载
+        if blacklist_exists and not module_loaded:
+            return True, "nouveau驱动已禁用（黑名单已配置，模块未加载）"
+
+        # 如果只有模块未加载但没有黑名单配置，仍需配置黑名单
+        if not blacklist_exists:
+            return False, "nouveau黑名单配置不存在"
 
         # 模块已加载但黑名单存在，可能需要重启
-        if blacklist_exists:
+        if module_loaded:
             return False, "nouveau黑名单已配置但模块仍在加载（需要重启）"
 
-        return False, "nouveau黑名单配置不存在"
+        return False, "nouveau未正确禁用"
 
     def execute(self, hosts: List[str]) -> StepResult:
         """执行禁用nouveau驱动"""
@@ -70,7 +76,7 @@ class DisableNouveau(BaseStep):
                 host_results={h: {"success": True, "already_disabled": True} for h in hosts}
             )
 
-        # 2. 添加黑名单（逐行追加）
+        # 2. 添加黑名单（逐行追加，但先检查避免重复）
         blacklist_lines = [
             "blacklist nouveau",
             "blacklist lbm-nouveau",
@@ -82,8 +88,18 @@ class DisableNouveau(BaseStep):
         for host in hosts:
             if host in already_disabled:
                 continue
+            # 检查文件是否已有完整配置，避免重复追加
+            check_full_cmd = "grep -q 'alias lbm-nouveau off' /etc/modprobe.d/blacklist.conf 2>/dev/null && echo 'complete' || echo 'incomplete'"
+            check_full_result = self.execute_on_host(host, check_full_cmd, sudo=False)
+            if check_full_result.get("stdout", "").strip() == "complete":
+                self.logger.info(f"[{host}] blacklist.conf 已有完整配置，跳过追加")
+                continue
             for line in blacklist_lines:
-                self.execute_on_host(host, f"echo '{line}' | sudo tee -a /etc/modprobe.d/blacklist.conf", sudo=True)
+                # 每行追加前检查是否已存在，避免重复
+                check_line_cmd = f"grep -qxF '{line}' /etc/modprobe.d/blacklist.conf 2>/dev/null && echo 'exists' || echo 'not_exists'"
+                check_line_result = self.execute_on_host(host, check_line_cmd, sudo=False)
+                if check_line_result.get("stdout", "").strip() != "exists":
+                    self.execute_on_host(host, f"echo '{line}' | sudo tee -a /etc/modprobe.d/blacklist.conf", sudo=True)
 
         # 3. 更新initramfs
         initramfs_cmd = "update-initramfs -k $(uname -r) -c"

@@ -371,14 +371,16 @@ class FinalVerification(BaseStep):
             "05": "sudo -n true 2>/dev/null && echo 'ok' || echo 'fail'",  # sudo免密
             "06": "mountpoint -q /ssd 2>/dev/null && echo 'ok' || echo 'fail'",  # 数据盘
             "09": f"grep -q $(hostname) /etc/hosts && echo 'ok' || echo 'fail'",  # hosts
+            "11": "test -s ~/.ssh/authorized_keys && test -f ~/.ssh/id_rsa && echo 'configured' || echo 'not_configured'",  # SSH免密
             "12": "cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null || echo 'unknown'",  # CPU模式
             "13": "ulimit -n",  # 文件描述符
+            "16": "grep 'GRUB_DEFAULT' /etc/default/grub | grep -q 'Advanced options' && echo 'locked' || echo 'not_locked'",  # 内核锁定
             "17": "timedatectl | grep 'Time zone' | awk '{print $3}'",  # 时区
             "18": "cat /proc/sys/net/ipv6/conf/all/disable_ipv6",  # IPv6
-            "21": "lsmod | grep -c nouveau || echo 0",  # nouveau
+            "21": "lsmod | grep -c nouveau 2>/dev/null || true",  # nouveau (grep -c输出0但exit=1时||true防止重复)
             "22": "nvidia-smi -L 2>/dev/null | wc -l || echo 0",  # NVIDIA驱动
             "24": "nvcc --version 2>/dev/null | tail -1 || echo 'not_installed'",  # CUDA
-            "27": "nvidia-smi -q 2>/dev/null | grep -c 'Persistence Mode.*Enabled' || echo 0",  # GPU持久模式
+            "27": "nvidia-smi -q 2>/dev/null | grep -c 'Persistence Mode.*Enabled' || true",  # GPU持久模式
         }
 
         if step_id not in check_commands:
@@ -401,6 +403,9 @@ class FinalVerification(BaseStep):
                 ok = output == "ok"
             elif step_id == "09":
                 ok = output == "ok"
+            elif step_id == "11":
+                # SSH免密登录检查
+                ok = output == "configured"
             elif step_id == "12":
                 ok = output == "performance"
             elif step_id == "13":
@@ -408,13 +413,18 @@ class FinalVerification(BaseStep):
                     ok = int(output) > 1024
                 except ValueError:
                     ok = False
+            elif step_id == "16":
+                # 内核锁定检查
+                ok = output == "locked"
             elif step_id == "17":
                 ok = "Asia/Shanghai" in output
             elif step_id == "18":
                 ok = output == "1"
             elif step_id == "21":
                 try:
-                    ok = int(output) == 0  # nouveau应该被禁用
+                    # 取第一行避免重复输出问题
+                    first_line = output.split('\n')[0].strip() if output else "0"
+                    ok = int(first_line) == 0  # nouveau应该被禁用
                 except ValueError:
                     ok = False
             elif step_id == "22":
@@ -426,7 +436,9 @@ class FinalVerification(BaseStep):
                 ok = "not_installed" not in output
             elif step_id == "27":
                 try:
-                    ok = int(output) > 0
+                    # 取第一行避免重复输出问题
+                    first_line = output.split('\n')[0].strip() if output else "0"
+                    ok = int(first_line) > 0
                 except ValueError:
                     ok = False
             else:
@@ -495,11 +507,14 @@ class FinalVerification(BaseStep):
         for host in hosts:
             result = self.execute_on_host(
                 host,
-                "nvidia-smi -q 2>/dev/null | grep -c 'Persistence Mode.*Enabled' || echo 0",
+                "nvidia-smi -q 2>/dev/null | grep -c 'Persistence Mode.*Enabled' || true",
                 sudo=False
             )
             try:
-                count = int(result.get("stdout", "0").strip())
+                stdout = result.get("stdout", "0").strip()
+                # 取第一行避免重复输出问题
+                first_line = stdout.split('\n')[0].strip() if stdout else "0"
+                count = int(first_line) if first_line.isdigit() else 0
                 check_item.host_results[host] = CheckStatus.PASS if count > 0 else CheckStatus.FAIL
                 check_item.details[host] = f"{count} GPUs in persistence mode"
             except ValueError:
@@ -592,14 +607,14 @@ class FinalVerification(BaseStep):
         for host in hosts:
             result = self.execute_on_host(
                 host,
-                "nvidia-smi 2>/dev/null | grep -c 'ERR!' || echo 0",
+                "nvidia-smi 2>/dev/null | grep -c 'ERR!' || true",
                 sudo=False
             )
             try:
-                # 处理多行输出（如 "0\n0"），每行代表一次grep结果
                 stdout = result.get("stdout", "0").strip()
-                lines = [l.strip() for l in stdout.split('\n') if l.strip()]
-                err_count = sum(int(l) for l in lines if l.isdigit())
+                # 取第一行避免重复输出问题
+                first_line = stdout.split('\n')[0].strip() if stdout else "0"
+                err_count = int(first_line) if first_line.isdigit() else 0
                 if err_count > 0:
                     check_item.host_results[host] = CheckStatus.FAIL
                     check_item.details[host] = f"{err_count} GPU功率异常"
@@ -620,20 +635,41 @@ class FinalVerification(BaseStep):
         for host in hosts:
             result = self.execute_on_host(
                 host,
-                "ibdev2netdev 2>/dev/null | grep -c -v down || echo 0",
+                "ibdev2netdev 2>/dev/null | grep -c -v down || true",
                 sudo=False
             )
             try:
-                up_count = int(result.get("stdout", "0").strip())
+                stdout = result.get("stdout", "0").strip()
+                # 取第一行避免重复输出问题
+                first_line = stdout.split('\n')[0].strip() if stdout else "0"
+                up_count = int(first_line) if first_line.isdigit() else 0
                 # 检查是否有down的接口
                 result_down = self.execute_on_host(
                     host,
-                    "ibdev2netdev 2>/dev/null | grep -i down | wc -l || echo 0",
+                    "ibdev2netdev 2>/dev/null | grep -i down | wc -l || true",
                     sudo=False
                 )
-                down_count = int(result_down.get("stdout", "0").strip())
+                stdout_down = result_down.get("stdout", "0").strip()
+                first_line_down = stdout_down.split('\n')[0].strip() if stdout_down else "0"
+                down_count = int(first_line_down) if first_line_down.isdigit() else 0
 
-                if down_count > 0:
+                if up_count == 0 and down_count == 0:
+                    # 检查是否有任何IB设备
+                    result_any = self.execute_on_host(
+                        host,
+                        "ibdev2netdev 2>/dev/null | wc -l || true",
+                        sudo=False
+                    )
+                    stdout_any = result_any.get("stdout", "0").strip()
+                    first_line_any = stdout_any.split('\n')[0].strip() if stdout_any else "0"
+                    total_count = int(first_line_any) if first_line_any.isdigit() else 0
+                    if total_count == 0:
+                        check_item.host_results[host] = CheckStatus.SKIP
+                        check_item.details[host] = "无IB设备"
+                    else:
+                        check_item.host_results[host] = CheckStatus.WARNING
+                        check_item.details[host] = "IB设备存在但状态未知"
+                elif down_count > 0:
                     check_item.host_results[host] = CheckStatus.WARNING
                     check_item.details[host] = f"{up_count} up, {down_count} down"
                 else:
@@ -653,22 +689,24 @@ class FinalVerification(BaseStep):
         for host in hosts:
             result = self.execute_on_host(
                 host,
-                "systemctl is-active nvidia-fabricmanager 2>/dev/null || echo 'inactive'",
+                "systemctl is-active nvidia-fabricmanager 2>/dev/null || true",
                 sudo=False
             )
             status = result.get("stdout", "").strip()
+            # 取第一行避免重复输出问题
+            status = status.split('\n')[0].strip() if status else ""
 
             if status == "active":
                 check_item.host_results[host] = CheckStatus.PASS
                 check_item.details[host] = "运行中"
-            elif status == "inactive":
+            elif status == "inactive" or status == "":
                 # 可能没有安装，检查是否需要
                 check_result = self.execute_on_host(
                     host,
-                    "which nv-fabricmanager 2>/dev/null || echo 'not_installed'",
+                    "which nv-fabricmanager 2>/dev/null || true",
                     sudo=False
                 )
-                if "not_installed" in check_result.get("stdout", ""):
+                if not check_result.get("stdout", "").strip():
                     check_item.host_results[host] = CheckStatus.SKIP
                     check_item.details[host] = "未安装"
                 else:
@@ -688,14 +726,14 @@ class FinalVerification(BaseStep):
         for host in hosts:
             result = self.execute_on_host(
                 host,
-                "lspci -vvv 2>/dev/null | grep -c 'ACSCtl.*SrcValid+' || echo 0",
+                "lspci -vvv 2>/dev/null | grep -c 'ACSCtl.*SrcValid+' || true",
                 sudo=True
             )
             try:
-                # 处理多行输出（如 "0\n0"），每行代表一个设备的计数
                 stdout = result.get("stdout", "0").strip()
-                lines = [l.strip() for l in stdout.split('\n') if l.strip()]
-                acs_count = sum(int(l) for l in lines if l.isdigit())
+                # 取第一行避免重复输出问题
+                first_line = stdout.split('\n')[0].strip() if stdout else "0"
+                acs_count = int(first_line) if first_line.isdigit() else 0
                 # ACS应该被禁用（count应该为0）
                 if acs_count == 0:
                     check_item.host_results[host] = CheckStatus.PASS
@@ -717,17 +755,30 @@ class FinalVerification(BaseStep):
         for host in hosts:
             result = self.execute_on_host(
                 host,
-                "lsmod | grep -c nvidia_peermem || echo 0",
+                "lsmod | grep -c nvidia_peermem || true",
                 sudo=False
             )
             try:
-                count = int(result.get("stdout", "0").strip())
+                stdout = result.get("stdout", "0").strip()
+                # 取第一行避免重复输出问题
+                first_line = stdout.split('\n')[0].strip() if stdout else "0"
+                count = int(first_line) if first_line.isdigit() else 0
                 if count > 0:
                     check_item.host_results[host] = CheckStatus.PASS
                     check_item.details[host] = "已加载"
                 else:
-                    check_item.host_results[host] = CheckStatus.WARNING
-                    check_item.details[host] = "未加载"
+                    # 检查配置文件是否存在（模块可能需要重启才能加载）
+                    config_result = self.execute_on_host(
+                        host,
+                        "test -f /etc/modules-load.d/nvidia.conf && echo 'configured' || true",
+                        sudo=False
+                    )
+                    if "configured" in config_result.get("stdout", ""):
+                        check_item.host_results[host] = CheckStatus.WARNING
+                        check_item.details[host] = "配置已创建，需重启加载"
+                    else:
+                        check_item.host_results[host] = CheckStatus.FAIL
+                        check_item.details[host] = "未配置"
             except ValueError:
                 check_item.host_results[host] = CheckStatus.UNKNOWN
                 check_item.details[host] = "无法获取"

@@ -61,7 +61,7 @@ class BaseStep(ABC):
     requires_sudo: bool = False
     requires_reboot: bool = False
     can_skip: bool = False
-    max_retries: int = 3
+    max_retries: int = 1  # 配置完成后仅检查和重试一次
     timeout: int = 300  # 秒
     is_optional: bool = False  # 是否为可选步骤，失败不影响整体流程
 
