@@ -27,3 +27,7 @@ logs/
 # OS
 .DS_Store
 Thumbs.db
+
+
+# personal
+conf-git/
