@@ -27,15 +27,15 @@
 
 # CUDA配置
 cuda:
-  version: "12.8"
-  toolkit_file: "cuda_12.8.0_570.86.10_linux.run"
+  version: "13.0"
+  toolkit_file: "cuda_13.0.0_580.65.06_linux.run"
 
   # 安装包位置（三选一，优先级从高到低）
   # 方式1: 集群节点已有文件（推荐，无需下载）
-  # local_file: "/opt/software/cuda_12.8.0_570.86.10_linux.run"
+  # local_file: "/opt/software/cuda_13.0.0_580.65.06_linux.run"
 
   # 方式2: 从URL下载（自动下载到跳转机，然后分发给所有节点）
-  # download_url: "https://developer.download.nvidia.com/compute/cuda/12.8.0/local_installers/cuda_12.8.0_570.86.10_linux.run"
+  download_url: "https://developer.download.nvidia.com/compute/cuda/13.0.0/local_installers/cuda_13.0.0_580.65.06_linux.run"
 
   # 校验和（可选，用于验证下载文件完整性）
   # checksum: "sha256:abc123..."
@@ -45,12 +45,12 @@ cuda:
 
 # NVIDIA驱动配置
 nvidia_driver:
-  version: "590.48.01"
-  file: "NVIDIA-Linux-x86_64-590.48.01.run"
+  version: "580.142"
+  file: "NVIDIA-Linux-x86_64-580.142.run"
 
   # 安装包位置（三选一）
-  # local_file: "/opt/software/NVIDIA-Linux-x86_64-590.48.01.run"
-  # download_url: "https://us.download.nvidia.com/XFree86/Linux-x86_64/590.48.01/NVIDIA-Linux-x86_64-590.48.01.run"
+  # local_file: "/opt/software/NVIDIA-Linux-x86_64-580.142.run"
+  # download_url: "https://us.download.nvidia.com/XFree86/Linux-x86_64/580.142/NVIDIA-Linux-x86_64-580.142.run"
 
   # 校验和（可选）
   # checksum: "sha256:xxx"
@@ -62,7 +62,7 @@ nvidia_driver:
 mlnx_ofed:
   version: "24.10-2.1.8.0"
   file: "MLNX_OFED_LINUX-24.10-2.1.8.0-ubuntu22.04-x86_64.tgz"
-  enabled: true
+  enabled: false
 
   # 安装包位置（三选一）
   # local_file: "/opt/software/MLNX_OFED_LINUX-24.10-2.1.8.0-ubuntu22.04-x86_64.tgz"
@@ -78,13 +78,58 @@ kernel:
     lock_version: true      # 是否锁定当前内核版本
     update_grub: true       # 是否更新GRUB固定启动版本
 
-# OpenSSH配置
-openssh:
-  min_version: "1:8.9p1-3ubuntu0.10"  # CVE-2024-6387 修复版本
-  auto_upgrade: true
+# APT换源配置
+apt_mirror:
+  enabled: true             # 是否启用APT换源
+  mirror: "tuna"            # 镜像源: tuna(清华) | aliyun(阿里) | ustc(中科大) | 自定义URL
 
 # NCCL配置
 nccl:
-  enabled: false
-  install_method: "source"
-  install_path: "/home/ubuntu/nccl"
+  enabled: true
+  install_method: "local_file"  # local_file: 本地zip上传 | source: 克隆源码编译
+  install_path: "/usr/local/nccl"
+  local_file: "/home/ubuntu/sourcecode/nccl-master.zip"
+  compile_jobs: 8  # 编译并行进程数，null 表示自动(nproc)
+
+# ============================================================
+# 性能测试软件包配置
+# ============================================================
+test_packages:
+  # 工具包本地目录（相对于项目根目录，或绝对路径）
+  packages_dir: "packages"
+
+  # 各测试工具包路径（相对于 packages_dir，或绝对路径）
+  cublas_bench: "cublasMatmulBench"       # CUBLAS矩阵乘法基准测试
+  gpu_burn: "gpu-burn-master.zip"          # GPU压力测试
+  nccl_tests: "nccl-tests-master.zip"      # NCCL通信性能测试
+  openmpi: "openmpi-4.1.8.tar.gz"         # OpenMPI（多机NCCL测试需要）
+
+  # 本地编译目录（避免NFS共享时多节点编译冲突）
+  build_dir: "/tmp/gpu-test-build"
+
+  # 共享工具目录（可放在NFS上供所有节点使用）
+  toolkit_dir: "/ssd/nfs/gpu-test/toolkit"
+
+  # 测试结果目录
+  result_dir: "/ssd/nfs/gpu-test/result"
+
+  # 编译日志目录
+  log_dir: "/ssd/nfs/gpu-test/logs"
+
+  # GPU Burn 测试时长（秒）
+  gpuburn_duration: 600
+
+  # NCCL 测试数据大小
+  # A100/H100/B200 等 PCIe 5.0 卡建议 8G
+  # RTX5090/V100 等 建议 2G
+  nccl_test_size: "2G"
+
+  # 编译并行进程数，null 表示自动(nproc)
+  compile_jobs: 8
+
+  # 编译策略：
+  # - local: 每个节点在本地 build_dir 独立编译（不推荐NFS环境）
+  # - single_node: 只在第一个节点编译（默认）
+  # - role_based: 根据 nodes.roles 中的 test_compile role 决定编译节点（推荐）
+  compile_strategy: "role_based"
+  compile_role: "test_compile"

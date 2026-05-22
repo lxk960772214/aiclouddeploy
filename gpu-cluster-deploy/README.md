@@ -668,6 +668,54 @@ python -m src.cli.network_test_cli --config config/cluster.yaml --format json --
 # HTTP 连接（curl http://www.baidu.com）
 ```
 
+
+### 性能测试模块（步骤 40-45）
+
+步骤 40-45 为 GPU 集群性能验证步骤，可选执行。
+
+#### 步骤说明
+
+| 步骤 | 名称 | 说明 | 需要编译 |
+|------|------|------|----------|
+| 40 | CUBLAS 基准测试 | 测试每张GPU的FP16/FP32/TF32矩阵乘法性能 | 否 |
+| 41 | NCCL 单机多卡测试 | 单节点内所有GPU的all_reduce/all_gather/alltoall性能 | 是 |
+| 42 | NCCL 显卡配对测试 | 单节点内两两GPU配对通信性能 | 是 |
+| 43 | Sysbench CPU 测试 | 不同线程数下CPU性能基准 | 否 |
+| 44 | GPU Burn 测试 | GPU满负载压力测试，验证稳定性 | 是 |
+| 45 | NCCL 多节点测试 | 多节点NCCL通信性能（all_reduce/all_gather/alltoall） | 是 |
+
+#### 前置配置
+
+在 `config/versions.yaml` 中配置 `test_packages` 段：
+
+```yaml
+test_packages:
+  packages_dir: "packages"                     # 工具包本地目录
+  cublas_bench: "cublasMatmulBench"            # CUBLAS基准测试
+  gpu_burn: "gpu-burn-master.zip"               # GPU压力测试
+  nccl_tests: "nccl-tests-master.zip"           # NCCL通信测试
+  openmpi: "openmpi-4.1.8.tar.gz"              # OpenMPI（多机测试需要）
+  toolkit_dir: "/ssd/nfs/gpu-test/toolkit"      # 共享工具目录
+  result_dir: "/ssd/nfs/gpu-test/result"        # 测试结果目录
+  nccl_test_size: "2G"                          # 测试数据大小
+  compile_strategy: "role_based"                # 编译策略
+  compile_role: "test_compile"                  # 编译角色
+```
+
+在 `cluster.yaml` 中为编译节点添加角色：
+
+```yaml
+nodes:
+  - hostname: "gpu-node-01"
+    ip: "10.0.0.1"
+    roles:
+      - gpu_node
+      - test_compile    # 此节点负责编译测试工具
+```
+
+
+
+
 ### 安装包管理器
 
 自动管理安装包的下载、分发和校验。
@@ -838,6 +886,93 @@ execution_order:
   - gpu-persistence
   - nvidia-modules
 ```
+
+
+## NCCL 环境变量调优指南
+
+自动检测脚本会根据网络类型（InfiniBand/RoCE）生成推荐的NCCL环境变量。以下参数可能需要根据实际硬件手动调整。
+
+### 关键参数说明
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `NCCL_IB_GID_INDEX` | IB=0, RoCE=3 | GID表索引。纯IB用0；RoCE需通过 `show_gids` 查找匹配IP的索引 |
+| `NCCL_IB_TC` | IB=0, RoCE=106 | Traffic Class。纯IB用0；RoCE无损网络用160，有损用106 |
+| `NCCL_IB_HCA` | 自动检测 | 使用的IB设备列表，只纳入link_layer=infiniband且最高速率的设备 |
+| `NCCL_IB_QPS_PER_CONNECTION` | 4 | 每连接的QP数。多IB卡机器设4可提升带宽；单IB卡建议1-2 |
+| `NCCL_NET_GDR_LEVEL` | 3 | GPUDirect RDMA级别。仅专业卡(A100/H100/B200)支持，消费级卡(RTX系列/V100)设0 |
+| `NCCL_MAX_NCHANNELS` | 16 | 最大通道数。多IB卡机器可设16；单IB卡建议去掉让NCCL自动选择 |
+| `NCCL_MIN_NCHANNELS` | 16 | 最小通道数。同MAX_NCHANNELS |
+
+### 单高速网卡场景
+
+如果每台机器只有 **1张IB卡**（如单口200Gb/s NDR），建议注释掉以下参数，让NCCL自动选择：
+
+```bash
+export NCCL_IB_DISABLE=0
+export NCCL_IB_HCA=mlx5_0:1
+export NCCL_IB_GID_INDEX=0
+export NCCL_IB_TC=0
+export NCCL_IB_RETRY_CNT=7
+export NCCL_IB_TIMEOUT=23
+# 以下参数单IB卡建议注释，使用NCCL默认值：
+# export NCCL_IB_QPS_PER_CONNECTION=4    # 单IB卡设1或2即可
+# export NCCL_NET_GDR_LEVEL=3            # 消费级卡(V100/RTX)必须设0
+# export NCCL_MAX_NCHANNELS=16           # 单IB卡不需要固定16通道
+# export NCCL_MIN_NCHANNELS=16
+export NCCL_SOCKET_IFNAME=eth0
+export NCCL_DEBUG=WARN
+export NCCL_CHECKS_DISABLE=1
+```
+
+### 多IB卡场景
+
+8张400Gb/s IB NDR（如H100典型配置）：
+
+```bash
+export NCCL_IB_DISABLE=0
+export NCCL_IB_HCA=mlx5_0:1,mlx5_10:1,mlx5_3:1,mlx5_4:1,mlx5_5:1,mlx5_6:1,mlx5_8:1,mlx5_9:1
+export NCCL_IB_GID_INDEX=0
+export NCCL_IB_TC=0
+export NCCL_IB_RETRY_CNT=7
+export NCCL_IB_TIMEOUT=23
+export NCCL_IB_QPS_PER_CONNECTION=4
+export NCCL_NET_GDR_LEVEL=3
+export NCCL_MAX_NCHANNELS=16
+export NCCL_MIN_NCHANNELS=16
+export NCCL_SOCKET_IFNAME=ens19f0np0
+export NCCL_DEBUG=WARN
+export NCCL_CHECKS_DISABLE=1
+```
+
+### NCCL_NET_GDR_LEVEL 与 GPU 型号
+
+| GPU 型号 | GPUDirect RDMA | 推荐值 | 说明 |
+|----------|---------------|--------|------|
+| H100 / H200 | 支持 | 3-5 | PCIe 5.0，GDR成熟度高 |
+| A100 / A800 | 支持 | 3 | PCIe 4.0，GDR成熟 |
+| B200 / B100 | 支持 | 3-5 | Blackwell架构 |
+| V100 | 支持（不稳定） | 2 | 需ConnectX-5+，建议从2开始 |
+| RTX 5090 / 4090 | **不支持** | 0 | 消费级卡，无GPUDirect RDMA |
+| RTX A6000 | 部分支持 | 2 | 专业卡但GDR支持有限 |
+
+### 验证方法
+
+```bash
+# 1. 查看GID表（确认GID_INDEX）
+show_gids
+
+# 2. 开启DEBUG模式运行一次测试，确认参数生效
+export NCCL_DEBUG=INFO
+# 运行nccl-test，观察输出中的 "IB" "GDR" "Channel" 等关键字
+
+# 3. 确认nvidia-peermem模块已加载（GDR前提）
+lsmod | grep nvidia_peermem
+# 如果未加载：sudo modprobe nvidia_peermem
+```
+
+
+
 
 ## CLI 命令参考
 
@@ -1022,6 +1157,12 @@ python src/main.py export --format json --output plan.json
 | 30 | 时间同步 | 配置 NTP 时间同步 | 是 | 否 |
 | 34 | NFS 配置 | 配置 NFS 服务端/客户端 | 是 | 否 |
 | final | 部署验证 | 验证部署结果和服务状态 | 否 | 否 |
+| 40 | CUBLAS 基准测试 | 测试每张GPU的CUBLAS矩阵乘法性能 | 否 | 否 |
+| 41 | NCCL 单机多卡测试 | 编译NCCL并测试单机多卡通信性能 | 否 | 否 |
+| 42 | NCCL 显卡配对测试 | 测试显卡之间的两两配对通信性能 | 否 | 否 |
+| 43 | Sysbench CPU 测试 | 测试CPU性能，使用不同线程数进行测试 | 否 | 否 |
+| 44 | GPU Burn 测试 | 编译并运行GPU Burn，验证GPU性能和稳定性 | 否 | 否 |
+| 45 | NCCL 多节点测试 | 使用OpenMPI进行多节点NCCL通信性能测试 | 是 | 否 |
 
 ## 模块分类
 
@@ -1337,11 +1478,6 @@ pytest tests/test_ssh_manager.py::TestSSHManager::test_connect -v
 4. **磁盘数据** - `format_disk` 默认为 false，防止意外数据丢失
 5. **网络环境** - 确保跳转服务器和内网节点网络可达
 6. **向后兼容** - 新功能保持向后兼容，旧配置文件无需修改
-
-
-## 待办
-
-- chrony 配置
 
 
 ## 许可证

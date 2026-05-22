@@ -3,7 +3,9 @@
     "allow": [
       "Bash(ls -la *.py 2>/dev/null)",
       "Bash(git add gpu-cluster-deploy/ .gridmind/ && git status)",
-      "Bash(cd /mnt/e/github/aiclouddeploy/gpu-cluster-deploy && python test_disk_mount.py)"
+      "Bash(cd /mnt/e/github/aiclouddeploy/gpu-cluster-deploy && python test_disk_mount.py)",
+      "Bash(chmod +x \"/Users/liuxinke/Nutstore Files/work/裸金属/aiclouddeploy/gpu-cluster-deploy/scripts/detect_nccl_network.sh\" \"/Users/liuxinke/Nutstore Files/work/裸金属/aiclouddeploy/gpu-cluster-deploy/scripts/generate_nccl_test_cmd.sh\")",
+      "WebSearch"
     ]
   }
 }

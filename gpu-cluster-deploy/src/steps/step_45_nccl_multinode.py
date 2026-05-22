@@ -107,77 +107,155 @@ class NCCLMultiNodeTest(BaseStep):
         result = self.execute_on_host(host, "hostname")
         return result.get("stdout", host).strip()
 
-    def _detect_ib_devices(self, host: str) -> List[Dict]:
-        """检测IB/RoCE设备信息，返回设备列表
-
-        每个设备包含: device, port, rate, phys_state, link_layer, netdev
-        """
-        cmd = "ibstatus 2>/dev/null"
-        result = self.execute_on_host(host, cmd)
-        if not result.get("success") or not result.get("stdout", "").strip():
-            return []
-
+    def _parse_ibstatus(self, output: str) -> List[Dict]:
+        """解析ibstatus输出"""
+        import re
         devices = []
         current = {}
-        for line in result.get("stdout", "").splitlines():
+        for line in output.splitlines():
             line = line.strip()
             if line.startswith("Infiniband device"):
                 if current and current.get("device"):
                     devices.append(current)
-                # "Infiniband device 'mlx5_0' port 1:"
-                parts = line.replace("'", "").replace(":", "").split()
-                current = {"device": parts[2] if len(parts) > 2 else "", "port": parts[4] if len(parts) > 4 else "1"}
-            elif "Rate:" in line:
-                current["rate"] = line.split(":")[-1].strip()
-            elif "Physical state:" in line:
-                current["phys_state"] = line.split(":")[-1].strip()
-            elif "Link layer:" in line:
-                current["link_layer"] = line.split(":")[-1].strip().lower()
+                # "Infiniband device 'mlx5_0' port 1 status:" 或 "Infiniband device 'mlx5_0' port 1:"
+                m = re.search(r"'(\S+)'.*port\s+(\d+)", line)
+                if m:
+                    current = {"device": m.group(1), "port": m.group(2)}
+                else:
+                    parts = line.replace("'", "").replace(":", "").split()
+                    current = {"device": parts[2] if len(parts) > 2 else "", "port": parts[4] if len(parts) > 4 else "1"}
+            elif re.match(r'^[Rr]ate:', line):
+                # "rate: 400 Gb/sec (4X NDR)" → 取第一个数字
+                m = re.search(r'(\d+)', line.split(":", 1)[-1])
+                current["rate"] = m.group(1) if m else "0"
+            elif re.match(r'^[Pp]hys(ical)?\s*state:', line):
+                current["phys_state"] = line.split(":", 1)[-1].strip()
+            elif re.match(r'^[Ll]ink\s*_?[Ll]ayer:', line):
+                current["link_layer"] = re.sub(r'^[Ll]ink\s*_?[Ll]ayer:\s*', '', line).strip().lower()
         if current and current.get("device"):
             devices.append(current)
+        return devices
 
-        # 补充netdev信息: ib设备 -> 以太网卡名映射
-        if devices:
-            netdev_cmd = "rdma link 2>/dev/null"
-            netdev_result = self.execute_on_host(host, netdev_cmd)
-            if netdev_result.get("success") and netdev_result.get("stdout", "").strip():
-                # 输出格式: link mlx5_0/1 active mlx5_0
-                for line in netdev_result.get("stdout", "").splitlines():
-                    parts = line.strip().split()
-                    if len(parts) >= 5:
-                        dev_port = parts[1]  # mlx5_0/1
-                        netdev = parts[4]    # 对应的网卡名
-                        dev_name = dev_port.split("/")[0]
-                        for d in devices:
-                            if d["device"] == dev_name:
-                                d["netdev"] = netdev
+    def _parse_ibstat(self, output: str) -> List[Dict]:
+        """解析ibstat输出"""
+        import re
+        devices = []
+        current = {}
+        for line in output.splitlines():
+            stripped = line.strip()
+            # CA 'mlx5_0'
+            m = re.match(r"^CA\s+'(\S+)'", stripped)
+            if m:
+                if current and current.get("device") and current.get("port"):
+                    devices.append(current)
+                current = {"device": m.group(1)}
+                continue
+            # Port 1:
+            m = re.match(r'^Port\s+(\d+):', stripped)
+            if m:
+                if current and current.get("device") and current.get("port"):
+                    devices.append(current)
+                current = {**current, "device": current.get("device", ""), "port": m.group(1)}
+                continue
+            if not current.get("port"):
+                continue
+            if re.match(r'^[Rr]ate:', stripped):
+                m2 = re.search(r'(\d+)', stripped.split(":", 1)[-1])
+                current["rate"] = m2.group(1) if m2 else "0"
+            elif re.match(r'^[Pp]hysical\s*state:', stripped):
+                current["phys_state"] = stripped.split(":", 1)[-1].strip()
+            elif re.match(r'^[Ss]tate:', stripped):
+                current["phys_state"] = current.get("phys_state", "") + " " + stripped.split(":", 1)[-1].strip()
+            elif re.match(r'^[Ll]ink\s*_?[Ll]ayer:', stripped):
+                current["link_layer"] = re.sub(r'^[Ll]ink\s*_?[Ll]ayer:\s*', '', stripped).strip().lower()
+        if current and current.get("device") and current.get("port"):
+            devices.append(current)
+        return devices
 
+    def _detect_ib_devices(self, host: str) -> List[Dict]:
+        """检测IB/RoCE设备信息，返回设备列表
+
+        每个设备包含: device, port, rate, phys_state, link_layer, netdev
+        优先用ibstatus，fallback用ibstat
+        """
+        # 优先ibstatus
+        cmd = "ibstatus 2>/dev/null"
+        result = self.execute_on_host(host, cmd)
+        if result.get("success") and result.get("stdout", "").strip():
+            devices = self._parse_ibstatus(result["stdout"])
+            if devices:
+                return self._enrich_ib_devices_with_netdev(host, devices)
+
+        # fallback: ibstat
+        cmd = "ibstat 2>/dev/null"
+        result = self.execute_on_host(host, cmd)
+        if result.get("success") and result.get("stdout", "").strip():
+            devices = self._parse_ibstat(result["stdout"])
+            if devices:
+                return self._enrich_ib_devices_with_netdev(host, devices)
+
+        return []
+
+    def _enrich_ib_devices_with_netdev(self, host: str, devices: List[Dict]) -> List[Dict]:
+        """补充IB设备的netdev信息"""
+        netdev_cmd = "rdma link 2>/dev/null"
+        netdev_result = self.execute_on_host(host, netdev_cmd)
+        if netdev_result.get("success") and netdev_result.get("stdout", "").strip():
+            for line in netdev_result.get("stdout", "").splitlines():
+                parts = line.strip().split()
+                if len(parts) >= 5:
+                    dev_port = parts[1]
+                    netdev = parts[4]
+                    dev_name = dev_port.split("/")[0]
+                    for d in devices:
+                        if d["device"] == dev_name:
+                            d["netdev"] = netdev
         return devices
 
     def _detect_active_ib_hcas(self, host: str) -> List[Dict]:
         """获取活跃的IB设备列表(Active状态)，按速率降序
 
-        返回: [{"device": "mlx5_0", "port": "1", "rate": "100", "link_layer": "infiniband", "netdev": ""}, ...]
+        过滤逻辑:
+        1. 只保留link_layer=infiniband的设备(RoCE/Ethernet走SOCKET_IFNAME)
+        2. 只保留Active/LinkUp状态
+        3. 只保留最高速率的设备(排除异速率卡)
+        4. 按设备名排序
         """
         devices = self._detect_ib_devices(host)
-        active = [d for d in devices if d.get("phys_state", "").lower() == "linkup" or d.get("phys_state", "").lower().startswith("active")]
+
+        # 只保留InfiniBand链路层设备
+        ib_devices = [d for d in devices if d.get("link_layer") == "infiniband"]
+        for d in devices:
+            if d.get("link_layer") != "infiniband":
+                self.logger.info(f"[{host}] [跳过] {d['device']}: 链路层={d.get('link_layer', 'N/A')} (非InfiniBand, 不纳入HCA)")
+
+        if not ib_devices:
+            return []
+
+        # 过滤Active/LinkUp状态
+        active = [d for d in ib_devices if "linkup" in d.get("phys_state", "").lower() or "active" in d.get("phys_state", "").lower()]
 
         if not active:
-            # 放宽条件：state包含Active
-            active = [d for d in devices if "active" in d.get("phys_state", "").lower() or "linkup" in d.get("phys_state", "").lower()]
+            active = ib_devices
 
-        if not active:
-            # 再放宽：只要有设备就用
-            active = devices
-
-        # 按速率降序排列
-        def sort_key(d):
+        # 只保留最高速率的设备
+        try:
+            max_rate = max(int(d.get("rate", "0")) for d in active)
+        except ValueError:
+            max_rate = 0
+        filtered = []
+        for d in active:
             try:
-                return int(d.get("rate", "0"))
+                if int(d.get("rate", "0")) == max_rate:
+                    filtered.append(d)
+                else:
+                    self.logger.info(f"[{host}] [跳过] {d['device']}: 速率={d.get('rate', '0')}Gb/s < 最高速率={max_rate}Gb/s")
             except ValueError:
-                return 0
-        active.sort(key=sort_key, reverse=True)
-        return active
+                pass
+
+        # 按设备名排序
+        filtered.sort(key=lambda d: d.get("device", ""))
+        return filtered
 
     def _detect_ethernet_ifaces(self, host: str, target_ip: str = None) -> Optional[str]:
         """检测节点间通信使用的以太网卡名称
@@ -286,21 +364,21 @@ class NCCLMultiNodeTest(BaseStep):
 
             # 根据IB类型设置推荐参数
             if has_infiniband:
-                # 原生InfiniBand: 使用DC传输，TC=160优化
-                nccl_env["NCCL_IB_GID_INDEX"] = "3"
-                nccl_env["NCCL_IB_TC"] = "160"
-                self.logger.info("检测到InfiniBand网络，使用IB优化参数(GID_INDEX=3, TC=160)")
-            else:
-                # RoCE: GID_INDEX通常需要0或1，TC取决于交换机配置
                 nccl_env["NCCL_IB_GID_INDEX"] = "0"
                 nccl_env["NCCL_IB_TC"] = "0"
-                self.logger.info("检测到RoCE网络，使用RoCE优化参数(GID_INDEX=0, TC=0)")
+                self.logger.info("检测到InfiniBand网络，使用IB优化参数(GID_INDEX=0, TC=0)")
+            else:
+                nccl_env["NCCL_IB_GID_INDEX"] = "3"
+                nccl_env["NCCL_IB_TC"] = "106"
+                self.logger.info("检测到RoCE网络，使用RoCE优化参数(GID_INDEX=3, TC=106)")
 
             # 通用IB参数
             nccl_env["NCCL_IB_RETRY_CNT"] = "7"
             nccl_env["NCCL_IB_TIMEOUT"] = "23"
             nccl_env["NCCL_IB_QPS_PER_CONNECTION"] = "4"
-            nccl_env["NCCL_NET_GDR_LEVEL"] = "2"
+            nccl_env["NCCL_NET_GDR_LEVEL"] = "3"
+            nccl_env["NCCL_MAX_NCHANNELS"] = "16"
+            nccl_env["NCCL_MIN_NCHANNELS"] = "16"
         else:
             nccl_env["NCCL_IB_DISABLE"] = "1"
             ib_status = {self._get_hostname(h): len(v) for h, v in all_ib_devices.items()}
@@ -326,9 +404,7 @@ class NCCLMultiNodeTest(BaseStep):
 
         # 通用参数
         nccl_env["NCCL_DEBUG"] = "WARN"
-        nccl_env["NCCL_ALGO"] = "Ring"
-        nccl_env["NCCL_MAX_NCHANNELS"] = "16"
-        nccl_env["NCCL_MIN_NCHANNELS"] = "16"
+        # nccl_env["NCCL_ALGO"] = "Ring"
         nccl_env["NCCL_CHECKS_DISABLE"] = "1"
 
         return nccl_env
