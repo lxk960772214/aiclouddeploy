@@ -332,9 +332,22 @@ class DeployLogger:
     def save_progress_report(self, filename: str = "progress_report.json"):
         """保存进度报告"""
         report_path = self.log_dir / filename
-        with open(report_path, 'w', encoding='utf-8') as f:
-            json.dump(self.get_progress_report(), f, indent=2, ensure_ascii=False)
-        self.info(f"进度报告已保存: {report_path}")
+        try:
+            with open(report_path, 'w', encoding='utf-8') as f:
+                json.dump(self.get_progress_report(), f, indent=2, ensure_ascii=False)
+            self.info(f"进度报告已保存: {report_path}")
+        except PermissionError:
+            # 权限不足时尝试删除旧文件后重新写入（NFS root_squash场景）
+            try:
+                if report_path.exists():
+                    report_path.unlink()
+                with open(report_path, 'w', encoding='utf-8') as f:
+                    json.dump(self.get_progress_report(), f, indent=2, ensure_ascii=False)
+                self.info(f"进度报告已保存(重试成功): {report_path}")
+            except (PermissionError, OSError) as e:
+                self.warning(f"无法保存进度报告({report_path}): {e}")
+        except OSError as e:
+            self.warning(f"无法保存进度报告({report_path}): {e}")
 
     def generate_html_report(self, filename: str = "deployment_report.html") -> str:
         """生成HTML报告"""
@@ -422,10 +435,22 @@ class DeployLogger:
 """
 
         report_path = self.log_dir / filename
-        with open(report_path, 'w', encoding='utf-8') as f:
-            f.write(html)
+        try:
+            with open(report_path, 'w', encoding='utf-8') as f:
+                f.write(html)
+            self.info(f"HTML报告已生成: {report_path}")
+        except PermissionError:
+            try:
+                if report_path.exists():
+                    report_path.unlink()
+                with open(report_path, 'w', encoding='utf-8') as f:
+                    f.write(html)
+                self.info(f"HTML报告已生成(重试成功): {report_path}")
+            except (PermissionError, OSError) as e:
+                self.warning(f"无法生成HTML报告({report_path}): {e}")
+        except OSError as e:
+            self.warning(f"无法生成HTML报告({report_path}): {e}")
 
-        self.info(f"HTML报告已生成: {report_path}")
         return str(report_path)
 
 

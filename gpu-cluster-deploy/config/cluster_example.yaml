@@ -49,6 +49,8 @@ nodes:
     roles:
       - nfs_server
       - time_server
+      - gpu_node
+      - test_compile      # 此节点负责编译测试工具（role_based策略）
     storage:
       type: "raid10"           # single | raid1 | raid10
       devices:
@@ -71,6 +73,7 @@ nodes:
       type: "single"
       device: "/dev/nvme0n1"
       mount_point: "/ssd"
+      filesystem: "ext4"
       format_disk: false       # ⚠️ 默认false，防止数据丢失
 
   # 示例3：不对磁盘做任何操作（省略 storage 配置）
@@ -144,6 +147,7 @@ network:
 # NFS配置（可选）
 nfs:
   enabled: true
+  action: "share"  # share: 共享(挂载) | unshare: 取消共享(卸载)
   server: "gpu-master"       # NFS服务器主机名
   export_path: "/ssd/nfs"    # 服务器导出路径
   client_mount: "/data"      # 客户端挂载路径
@@ -158,6 +162,7 @@ ssh_key:
   enabled: true              # 是否启用免密配置
   users:                     # 要配置免密的用户列表
     - ubuntu
+    - root
   # private_key: "~/.ssh/id_rsa"
   # public_key: "~/.ssh/id_rsa.pub"
 

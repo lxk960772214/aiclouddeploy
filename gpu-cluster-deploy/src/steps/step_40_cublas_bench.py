@@ -5,7 +5,7 @@
 """
 
 import os
-from typing import List
+from typing import List, Optional
 from pathlib import Path
 from src.steps.base import BaseStep, StepResult, StepStatus
 
@@ -19,6 +19,24 @@ class CUBLASBenchmark(BaseStep):
     requires_sudo = False
     supports_batch = True
     timeout = 600  # 10分钟
+
+    def _get_cuda_home(self, host: str) -> str:
+        """获取CUDA安装路径，优先使用/usr/local/cuda符号链接，若无效则查找cuda-版本目录"""
+        # 检查/usr/local/cuda是否是有效路径（非悬空符号链接）
+        check_cmd = "test -d /usr/local/cuda/include && echo 'valid' || echo 'invalid'"
+        result = self.execute_on_host(host, check_cmd)
+        if result.get("stdout", "").strip() == "valid":
+            return "/usr/local/cuda"
+        # 查找/usr/local/cuda-*目录，取最新版本
+        find_cmd = "ls -d /usr/local/cuda-* 2>/dev/null | sort -V | tail -1"
+        find_result = self.execute_on_host(host, find_cmd)
+        cuda_path = find_result.get("stdout", "").strip()
+        if cuda_path:
+            self.logger.info(f"[{host}] /usr/local/cuda 无效，使用 {cuda_path}")
+            return cuda_path
+        # 回退到默认路径
+        self.logger.warning(f"[{host}] 未找到有效的CUDA安装路径，使用默认 /usr/local/cuda")
+        return "/usr/local/cuda"
 
     def _get_test_config(self):
         """获取测试配置"""
@@ -85,27 +103,33 @@ class CUBLASBenchmark(BaseStep):
             return True, "CUBLAS测试工具已存在"
         return False, "CUBLAS测试工具不存在"
 
+    def _get_package_path(self, config_key: str, default_filename: str) -> Optional[str]:
+        """获取工具包的本地绝对路径
+
+        Args:
+            config_key: test_packages中的配置键名
+            default_filename: 默认文件名（配置中未指定时使用）
+
+        Returns:
+            本地包文件的绝对路径，如果找不到返回None
+        """
+        config = self._get_test_config()
+        if config:
+            pkg_value = getattr(config, config_key, None)
+            if pkg_value:
+                return pkg_value  # 已在配置加载时解析为绝对路径
+        return os.path.join(os.getcwd(), "packages", default_filename)
+
     def _upload_cublas_tool(self, host: str) -> bool:
         """上传CUBLAS测试工具到远程节点"""
         toolkit_dir = self._get_toolkit_dir()
-        config = self._get_test_config()
 
-        # 获取本地包路径
-        local_path = None
-        if config and config.cublas_bench:
-            pkg_dir = config.packages_dir
-            if not os.path.isabs(pkg_dir):
-                pkg_dir = os.path.join(os.getcwd(), pkg_dir)
-            local_path = os.path.join(pkg_dir, config.cublas_bench)
+        # 获取本地包路径（已在配置加载时解析为绝对路径）
+        local_path = self._get_package_path("cublas_bench", "cublasMatmulBench")
 
-        # 如果配置中没有指定，使用默认位置
         if not local_path or not os.path.exists(local_path):
-            default_path = os.path.join(os.getcwd(), "packages", "cublasMatmulBench")
-            if os.path.exists(default_path):
-                local_path = default_path
-            else:
-                self.logger.error(f"未找到cublasMatmulBench工具，请检查packages目录")
-                return False
+            self.logger.error(f"未找到cublasMatmulBench工具: {local_path}，请检查packages目录")
+            return False
 
         self.logger.info(f"[{host}] 上传CUBLAS测试工具: {local_path}")
 
@@ -168,7 +192,7 @@ class CUBLASBenchmark(BaseStep):
             for gpu_id in range(gpu_count):
                 self.logger.info(f"[{host}] 测试 GPU {gpu_id}...")
 
-                env_cmd = f"export CUDA_VISIBLE_DEVICES={gpu_id} && export PATH=/usr/local/cuda/bin:$PATH && export LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH"
+                env_cmd = f"export CUDA_VISIBLE_DEVICES={gpu_id} && export PATH={self._get_cuda_home(host)}/bin:$PATH && export LD_LIBRARY_PATH={self._get_cuda_home(host)}/lib64:$LD_LIBRARY_PATH"
 
                 test_items = [
                     ("FP64", "-P=ddd -m=15360 -n=18176 -k=8192 -T=8"),

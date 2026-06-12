@@ -132,6 +132,7 @@ class NodeConfig:
 class NFSConfig:
     """NFS配置"""
     enabled: bool = True
+    action: str = "share"  # share: 共享(挂载) | unshare: 取消共享(卸载)
     server: Optional[str] = None
     export_path: str = "/ssd/nfs"
     client_mount: str = "/data"
@@ -140,6 +141,7 @@ class NFSConfig:
     def to_dict(self) -> Dict:
         return {
             "enabled": self.enabled,
+            "action": self.action,
             "server": self.server,
             "export_path": self.export_path,
             "client_mount": self.client_mount,

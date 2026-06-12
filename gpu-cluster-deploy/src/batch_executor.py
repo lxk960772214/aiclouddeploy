@@ -473,10 +473,15 @@ class BatchExecutor:
         self.pdsh_executor = PdshExecutor(ssh_user=ssh_user, **pdsh_kwargs)
         logger.info("已切换到pdsh批量执行模式")
 
-    def _get_node_auth(self, host: str) -> Tuple[str, str]:
-        """获取节点认证信息"""
+    def _get_node_auth(self, host: str) -> Tuple[str, Optional[str], Optional[str]]:
+        """获取节点认证信息
+
+        Returns:
+            (username, password, private_key) 元组
+        """
         username = 'ubuntu'
         password = None
+        private_key = None
 
         if self.config:
             for node in self.config.nodes:
@@ -485,14 +490,17 @@ class BatchExecutor:
                         username = node.username
                     if hasattr(node, 'password') and node.password:
                         password = node.password
+                    if hasattr(node, 'private_key') and node.private_key:
+                        private_key = node.private_key
                     break
 
             # 如果节点没有单独配置，尝试从jumphost.node_auth获取
-            if password is None and self.config.jumphost and self.config.jumphost.node_auth:
+            if password is None and private_key is None and self.config.jumphost and self.config.jumphost.node_auth:
                 username = self.config.jumphost.node_auth.username or username
                 password = self.config.jumphost.node_auth.password
+                private_key = self.config.jumphost.node_auth.private_key
 
-        return username, password
+        return username, password, private_key
 
     def execute(self, hosts: List[str], command: str,
                 timeout: Optional[int] = None,
@@ -518,13 +526,14 @@ class BatchExecutor:
 
         def executor_func(host: str, cmd: str) -> BatchResult:
             # 获取节点认证信息
-            username, password = self._get_node_auth(host)
+            username, password, private_key = self._get_node_auth(host)
 
             result = self.ssh_manager.execute_on_host(
                 host=host,
                 command=cmd,
                 username=username,
                 password=password,
+                private_key=private_key,
                 timeout=timeout or 300,
                 sudo=sudo,
                 sudo_password=sudo_password or password
@@ -574,11 +583,12 @@ class BatchExecutor:
             try:
                 if self.ssh_manager:
                     # 获取节点认证信息
-                    username, password = self._get_node_auth(host)
+                    username, password, private_key = self._get_node_auth(host)
                     conn = self.ssh_manager.get_connection(
                         host,
                         username=username,
-                        password=password
+                        password=password,
+                        private_key=private_key
                     )
                     if conn and conn.is_connected():
                         result = conn.execute("echo 'connectivity_check'")

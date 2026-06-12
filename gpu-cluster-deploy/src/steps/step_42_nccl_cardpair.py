@@ -5,7 +5,7 @@
 """
 
 import os
-from typing import List
+from typing import List, Optional
 from src.steps.base import BaseStep, StepResult, StepStatus
 
 
@@ -18,6 +18,21 @@ class NCCLCardPairTest(BaseStep):
     requires_sudo = False
     supports_batch = True
     timeout = 600
+
+    def _get_cuda_home(self, host: str) -> str:
+        """获取CUDA安装路径，优先使用/usr/local/cuda符号链接，若无效则查找cuda-版本目录"""
+        check_cmd = "test -d /usr/local/cuda/include && echo 'valid' || echo 'invalid'"
+        result = self.execute_on_host(host, check_cmd)
+        if result.get("stdout", "").strip() == "valid":
+            return "/usr/local/cuda"
+        find_cmd = "ls -d /usr/local/cuda-* 2>/dev/null | sort -V | tail -1"
+        find_result = self.execute_on_host(host, find_cmd)
+        cuda_path = find_result.get("stdout", "").strip()
+        if cuda_path:
+            self.logger.info(f"[{host}] /usr/local/cuda 无效，使用 {cuda_path}")
+            return cuda_path
+        self.logger.warning(f"[{host}] 未找到有效的CUDA安装路径，使用默认 /usr/local/cuda")
+        return "/usr/local/cuda"
 
     def _get_toolkit_dir(self) -> str:
         """获取工具包目录路径"""
@@ -87,7 +102,8 @@ class NCCLCardPairTest(BaseStep):
             self.logger.info(f"[{host}] 测试配对: {pairs}")
 
             # 5. 设置环境变量
-            env_cmd = f"export LD_LIBRARY_PATH={toolkit_dir}/nccl/lib:/usr/local/cuda/lib64:$LD_LIBRARY_PATH"
+            cuda_home = self._get_cuda_home(host)
+            env_cmd = f"export LD_LIBRARY_PATH={toolkit_dir}/nccl/lib:{cuda_home}/lib64:$LD_LIBRARY_PATH"
 
             test_results = {}
             hostname_cmd = "hostname"

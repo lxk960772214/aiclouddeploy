@@ -1479,6 +1479,13 @@ pytest tests/test_ssh_manager.py::TestSSHManager::test_connect -v
 5. **网络环境** - 确保跳转服务器和内网节点网络可达
 6. **向后兼容** - 新功能保持向后兼容，旧配置文件无需修改
 
+## 待开发或验证
+
+1. time server 验证
+2. node_batch 验证
+3、把nccl部分移入test_packages里面。
+4、packages_dir: "packages"  # 相对于项目根目录，或绝对路径 很好用，添加
+本地编译目录 共享工具目录（可NFS）测试结果目录 编译日志目录 也可以便捷的使用相对目录，比如gpu-cluster-deploy下面的test_run目录
 
 ## 许可证
 

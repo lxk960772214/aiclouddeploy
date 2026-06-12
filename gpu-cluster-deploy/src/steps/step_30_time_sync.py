@@ -18,7 +18,7 @@ class TimeSync(BaseStep):
     # Server端配置
     SERVER_CONFIG = '''server 127.127.1.0 iburst
 local stratum 10
-driftfile /var/lib/chrony/drift
+driftfile /var/lib/chrony/chrony.drift
 makestep 1.0 3
 rtcsync
 logdir /var/log/chrony
@@ -27,7 +27,7 @@ allow all'''
     def _get_client_config(self, server_ip: str) -> str:
         """获取客户端配置"""
         return f'''server {server_ip} iburst
-driftfile /var/lib/chrony/drift
+driftfile /var/lib/chrony/chrony.drift
 makestep 1.0 3
 rtcsync
 logdir /var/log/chrony'''
@@ -166,7 +166,74 @@ EOF'''
         return True, "chrony服务已启用（无法检查配置）"
 
     def post_check(self, hosts: List[str]) -> bool:
-        """验证时间同步"""
-        cmd = "chronyc tracking | grep -q 'Reference ID'"
-        result = self.execute_batch(hosts, cmd, sudo=False)
-        return all(r.success for r in result.results.values())
+        """验证时间同步
+
+        Server端：chronyc tracking 显示 Reference ID 为本地时钟(127.127.1.0)
+        Client端：chronyc tracking 显示 Reference ID 指向 server_ip，
+                  且 chronyc sources 中 server_ip 行状态为 ^*（当前同步源）
+        """
+        time_server = self.config.time_server_node if self.config else None
+        server_ip = time_server.ip if time_server else None
+
+        all_ok = True
+        for host in hosts:
+            is_server = (host == server_ip) if server_ip else False
+
+            # 1. 检查 chronyc tracking 是否有 Reference ID（chrony 正在工作）
+            tracking_cmd = "chronyc tracking 2>/dev/null"
+            tracking_result = self.execute_on_host(host, tracking_cmd, sudo=False, timeout=30)
+            tracking_output = tracking_result.get("stdout", "")
+
+            if not tracking_output or "Reference ID" not in tracking_output:
+                self.logger.warning(f"[{host}] chronyc tracking 无 Reference ID，chrony 可能未正常工作")
+                all_ok = False
+                continue
+
+            if is_server:
+                # Server端：Reference ID 应为 127.127.1.0（本地时钟）
+                if "127.127.1.0" in tracking_output:
+                    self.logger.info(f"[{host}] 时间服务器验证通过（本地时钟源）")
+                else:
+                    self.logger.warning(f"[{host}] 时间服务器 Reference ID 非 127.127.1.0: {tracking_output[:200]}")
+                    # 不算失败，可能已从外网NTP同步
+            else:
+                # Client端：验证是否通过 server_ip 同步
+                if not server_ip:
+                    self.logger.info(f"[{host}] 未指定时间服务器，跳过客户端同步验证")
+                    continue
+
+                # 检查 chronyc sources 中 server_ip 是否为同步源（^* 标记）
+                sources_cmd = "chronyc sources 2>/dev/null"
+                sources_result = self.execute_on_host(host, sources_cmd, sudo=False, timeout=30)
+                sources_output = sources_result.get("stdout", "")
+
+                # 检查 server_ip 是否出现在 sources 中且状态为 ^*（当前同步源）
+                server_synced = False
+                for line in sources_output.splitlines():
+                    # chronyc sources 输出格式: ^* server_ip 或行中包含 server_ip 且以 ^* 开头
+                    if server_ip in line and line.strip().startswith("^*"):
+                        server_synced = True
+                        break
+
+                if server_synced:
+                    self.logger.info(f"[{host}] 时间客户端验证通过（已通过 {server_ip} 同步）")
+                else:
+                    # 宽松检查：tracking 输出中包含 server_ip 也算通过（可能还在同步中）
+                    if server_ip in tracking_output:
+                        self.logger.info(f"[{host}] 时间客户端验证通过（tracking 显示指向 {server_ip}）")
+                    else:
+                        # 最后检查：配置文件中有 server_ip 且 chrony 运行中
+                        config_check = self.execute_on_host(
+                            host, f"grep -q 'server {server_ip}' /etc/chrony/chrony.conf 2>/dev/null && echo 'ok' || echo 'fail'",
+                            sudo=False, timeout=10
+                        )
+                        if config_check.get("stdout", "").strip() == "ok":
+                            self.logger.warning(
+                                f"[{host}] 时间客户端配置正确但尚未与 {server_ip} 同步，"
+                                f"可能需要等待几分钟（chronyc sources: {sources_output[:200]})"
+                            )
+                        else:
+                            self.logger.error(f"[{host}] 时间客户端未指向 {server_ip}")
+                            all_ok = False
+
+        return all_ok

@@ -31,7 +31,9 @@ cuda:
   toolkit_file: "cuda_13.0.0_580.65.06_linux.run"
 
   # 安装包位置（三选一，优先级从高到低）
-  # 方式1: 集群节点已有文件（推荐，无需下载）
+  # 方式1: 从本地上传（支持相对路径，基于项目根目录 gpu-cluster-deploy/）
+  # local_file: "packages/cuda_13.0.0_580.65.06_linux.run"
+  # 也可以使用绝对路径:
   # local_file: "/opt/software/cuda_13.0.0_580.65.06_linux.run"
 
   # 方式2: 从URL下载（自动下载到跳转机，然后分发给所有节点）
@@ -47,9 +49,11 @@ cuda:
 nvidia_driver:
   version: "580.142"
   file: "NVIDIA-Linux-x86_64-580.142.run"
+  local_file: "packages/NVIDIA-Linux-x86_64-580.142.run"
 
   # 安装包位置（三选一）
-  # local_file: "/opt/software/NVIDIA-Linux-x86_64-580.142.run"
+  # local_file: "packages/NVIDIA-Linux-x86_64-580.142.run"  # 相对路径（基于项目根目录）
+  # local_file: "/opt/software/NVIDIA-Linux-x86_64-580.142.run"  # 绝对路径
   # download_url: "https://us.download.nvidia.com/XFree86/Linux-x86_64/580.142/NVIDIA-Linux-x86_64-580.142.run"
 
   # 校验和（可选）
@@ -65,7 +69,8 @@ mlnx_ofed:
   enabled: false
 
   # 安装包位置（三选一）
-  # local_file: "/opt/software/MLNX_OFED_LINUX-24.10-2.1.8.0-ubuntu22.04-x86_64.tgz"
+  # local_file: "packages/MLNX_OFED_LINUX-24.10-2.1.8.0-ubuntu22.04-x86_64.tgz"  # 相对路径（基于项目根目录）
+  # local_file: "/opt/software/MLNX_OFED_LINUX-24.10-2.1.8.0-ubuntu22.04-x86_64.tgz"  # 绝对路径
   # download_url: "https://content.mellanox.com/ofed/MLNX_OFED-24.10-2.1.8.0/MLNX_OFED_LINUX-24.10-2.1.8.0-ubuntu22.04-x86_64.tgz"
 
   # 校验和（可选）
@@ -88,7 +93,6 @@ nccl:
   enabled: true
   install_method: "local_file"  # local_file: 本地zip上传 | source: 克隆源码编译
   install_path: "/usr/local/nccl"
-  local_file: "/home/ubuntu/sourcecode/nccl-master.zip"
   compile_jobs: 8  # 编译并行进程数，null 表示自动(nproc)
 
 # ============================================================
@@ -101,20 +105,29 @@ test_packages:
   # 各测试工具包路径（相对于 packages_dir，或绝对路径）
   cublas_bench: "cublasMatmulBench"       # CUBLAS矩阵乘法基准测试
   gpu_burn: "gpu-burn-master.zip"          # GPU压力测试
+  nccl: "nccl-master.zip"                 # NCCL源码包（编译NCCL库用），和上面的nccl是独立的，会检测toolkit_dir下有没有编译好的NCCL库，没有的话会编译
   nccl_tests: "nccl-tests-master.zip"      # NCCL通信性能测试
   openmpi: "openmpi-4.1.8.tar.gz"         # OpenMPI（多机NCCL测试需要）
 
   # 本地编译目录（避免NFS共享时多节点编译冲突）
-  build_dir: "/tmp/gpu-test-build"
+  # 支持相对路径（基于项目根目录 gpu-cluster-deploy/），或绝对路径
+  # 相对路径示例: "test_run/build" → /path/to/gpu-cluster-deploy/test_run/build
+  # 绝对路径示例: "/tmp/gpu-test-build" 或 "/ssd/nfs/gpu-test-build"
+  build_dir: "test_run/build"
 
   # 共享工具目录（可放在NFS上供所有节点使用）
-  toolkit_dir: "/ssd/nfs/gpu-test/toolkit"
+  # 支持相对路径（基于项目根目录 gpu-cluster-deploy/），或绝对路径
+  # 相对路径示例: "test_run/toolkit" → /path/to/gpu-cluster-deploy/test_run/toolkit
+  # 绝对路径示例: "/ssd/nfs/gpu-test/toolkit" (NFS共享目录)
+  toolkit_dir: "test_run/toolkit"
 
   # 测试结果目录
-  result_dir: "/ssd/nfs/gpu-test/result"
+  # 支持相对路径（基于项目根目录 gpu-cluster-deploy/），或绝对路径
+  result_dir: "test_run/result"
 
   # 编译日志目录
-  log_dir: "/ssd/nfs/gpu-test/logs"
+  # 支持相对路径（基于项目根目录 gpu-cluster-deploy/），或绝对路径
+  log_dir: "test_run/logs"
 
   # GPU Burn 测试时长（秒）
   gpuburn_duration: 600
@@ -132,4 +145,7 @@ test_packages:
   # - single_node: 只在第一个节点编译（默认）
   # - role_based: 根据 nodes.roles 中的 test_compile role 决定编译节点（推荐）
   compile_strategy: "role_based"
+  
+  # 编译角色名称（当compile_strategy=role_based时生效）
+  # 节点需要在roles中添加此角色才会参与编译
   compile_role: "test_compile"

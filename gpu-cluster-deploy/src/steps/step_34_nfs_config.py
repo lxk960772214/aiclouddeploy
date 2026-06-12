@@ -90,8 +90,6 @@ class NFSConfig(BaseStep):
 
     def execute(self, hosts: List[str]) -> StepResult:
         """执行NFS配置"""
-        results = {}
-
         # 检查是否启用NFS
         nfs_config = self.config.nfs
         if not nfs_config or not nfs_config.enabled:
@@ -102,6 +100,18 @@ class NFSConfig(BaseStep):
                 status=StepStatus.SKIPPED,
                 message="NFS未启用，跳过配置"
             )
+
+        # 根据action分流
+        action = nfs_config.action
+        if action == "unshare":
+            return self._execute_unshare(hosts)
+        else:
+            # 默认执行共享
+            return self._execute_share(hosts)
+
+    def _execute_share(self, hosts: List[str]) -> StepResult:
+        """执行NFS共享（挂载）"""
+        results = {}
 
         # 获取NFS服务器节点
         nfs_server = self.config.nfs_server_node
@@ -125,8 +135,8 @@ class NFSConfig(BaseStep):
                 message=f"无法获取NFS服务器 {nfs_server.hostname} 的IP地址"
             )
 
-        export_path = nfs_config.export_path
-        client_mount = nfs_config.client_mount
+        export_path = self.config.nfs.export_path
+        client_mount = self.config.nfs.client_mount
 
         # 使用智能IP选择获取客户端IP列表
         client_ips = self._get_client_ips_for_nfs()
@@ -143,7 +153,8 @@ class NFSConfig(BaseStep):
         self.execute_on_host(server_ip, install_server_cmd, sudo=True)
 
         # 创建导出目录
-        mkdir_cmd = f"mkdir -p {export_path} && chmod -R 777 {export_path}"
+        # mkdir_cmd = f"mkdir -p {export_path} && chmod -R a+rwX {export_path}"
+        mkdir_cmd = f"mkdir -p {export_path}"
         self.execute_on_host(server_ip, mkdir_cmd, sudo=True)
 
         # 配置exports（避免重复添加）
@@ -222,6 +233,170 @@ class NFSConfig(BaseStep):
             host_results=results
         )
 
+    def _execute_unshare(self, hosts: List[str]) -> StepResult:
+        """
+        执行NFS取消共享（卸载）
+
+        参考 conf-git/deliveryTest/base_step5_deployServ.sh NFS_FILE_UNSHARE 逻辑：
+        1. 单节点检查，跳过
+        2. 在服务器端：SSH到每个客户端节点执行umount
+        3. 清理/etc/exports中相关条目
+        4. 在客户端：删除fstab条目
+        """
+        nfs_config = self.config.nfs
+        results = {}
+
+        # 单节点检查
+        if len(self.config.nodes) <= 1:
+            self.logger.info("单节点无需卸载NFS服务")
+            return StepResult(
+                step_id=self.step_id,
+                step_name=self.step_name,
+                status=StepStatus.SKIPPED,
+                message="单节点无需卸载NFS服务"
+            )
+
+        # 获取NFS服务器节点
+        nfs_server = self.config.nfs_server_node
+        if not nfs_server:
+            self.logger.warning("未配置NFS服务器节点，跳过")
+            return StepResult(
+                step_id=self.step_id,
+                step_name=self.step_name,
+                status=StepStatus.SKIPPED,
+                message="未配置NFS服务器节点"
+            )
+
+        # 获取服务器IP
+        server_ip = self._get_nfs_server_ip(nfs_server.hostname)
+        if not server_ip:
+            self.logger.error(f"无法获取NFS服务器 {nfs_server.hostname} 的IP地址")
+            return StepResult(
+                step_id=self.step_id,
+                step_name=self.step_name,
+                status=StepStatus.FAILED,
+                message=f"无法获取NFS服务器 {nfs_server.hostname} 的IP地址"
+            )
+
+        export_path = nfs_config.export_path
+        client_mount = nfs_config.client_mount
+
+        self.logger.info(f"取消NFS共享: 服务器 {nfs_server.hostname} ({server_ip})")
+        self.logger.info(f"导出路径: {export_path}, 客户端挂载: {client_mount}")
+
+        # 1. 在每个客户端节点上卸载NFS
+        for host in hosts:
+            client_node = self.config.get_node_by_ip(host) or self.config.get_node_by_hostname(host)
+            if not client_node:
+                self.logger.warning(f"未找到节点 {host}，跳过")
+                continue
+
+            # 跳过服务器自己
+            if client_node.hostname == nfs_server.hostname:
+                continue
+
+            self.logger.info(f"[{host}] 卸载NFS挂载...")
+
+            # 检查是否已挂载
+            check_mount_cmd = f"mount | grep -q '{server_ip}:{export_path}' && echo 'mounted' || echo 'not_mounted'"
+            check_result = self.execute_on_host(host, check_mount_cmd, sudo=True)
+            mount_status = check_result.get("stdout", "").strip()
+
+            if mount_status == "not_mounted":
+                self.logger.info(f"[{host}] NFS未挂载，跳过卸载")
+                results[host] = {"success": True, "message": "NFS未挂载，跳过"}
+                # 仍然需要清理fstab
+                self._remove_fstab_entry(host, server_ip, export_path, client_mount)
+                continue
+
+            # 执行卸载 - 先cd到/root避免cwd在NFS挂载目录内
+            umount_cmd = f"cd /root && umount {client_mount}"
+            umount_result = self.execute_on_host(host, umount_cmd, sudo=True)
+
+            if not umount_result.get("success", False):
+                # 正常卸载失败，尝试懒卸载
+                self.logger.warning(f"[{host}] 正常卸载失败，尝试懒卸载(umount -l)...")
+                lazy_umount_cmd = f"umount -l {client_mount}"
+                lazy_result = self.execute_on_host(host, lazy_umount_cmd, sudo=True)
+
+                if not lazy_result.get("success", False):
+                    self.logger.error(f"[{host}] 懒卸载也失败，请手动检查占用进程: lsof +D {client_mount}")
+                    results[host] = {"success": False, "message": f"卸载失败，请手动检查: lsof +D {client_mount}"}
+                    continue
+
+            # 验证卸载是否成功
+            verify_cmd = f"mount | grep -q '{server_ip}:{export_path}' && echo 'still_mounted' || echo 'unmounted'"
+            verify_result = self.execute_on_host(host, verify_cmd, sudo=True)
+            verify_status = verify_result.get("stdout", "").strip()
+
+            if verify_status == "still_mounted":
+                self.logger.error(f"[{host}] 卸载后仍处于挂载状态，请手动检查")
+                results[host] = {"success": False, "message": "卸载后仍处于挂载状态"}
+                continue
+
+            # 删除挂载点目录
+            rmdir_cmd = f"rmdir {client_mount} 2>/dev/null || true"
+            self.execute_on_host(host, rmdir_cmd, sudo=True)
+
+            # 清理fstab条目
+            self._remove_fstab_entry(host, server_ip, export_path, client_mount)
+
+            self.logger.info(f"[{host}] NFS卸载成功")
+            results[host] = {"success": True, "message": "NFS卸载成功"}
+
+        # 2. 在服务器端清理exports配置
+        self.logger.info(f"[{server_ip}] 清理NFS服务器端exports配置...")
+        check_exports_cmd = f"grep -q '{export_path}' /etc/exports 2>/dev/null && echo 'exists' || echo 'not_exists'"
+        check_result = self.execute_on_host(server_ip, check_exports_cmd, sudo=True)
+
+        if check_result.get("stdout", "").strip() == "exists":
+            # 从/etc/exports中移除包含export_path的行
+            sed_cmd = f"sed -i '\\|{export_path}|d' /etc/exports"
+            self.execute_on_host(server_ip, sed_cmd, sudo=True)
+
+            # 刷新exports
+            exportfs_cmd = "exportfs -arv"
+            self.execute_on_host(server_ip, exportfs_cmd, sudo=True)
+            self.logger.info(f"[{server_ip}] exports中相关条目已移除")
+        else:
+            self.logger.info(f"[{server_ip}] exports中无相关条目，跳过")
+
+        results[server_ip] = {"success": True, "message": "服务器端exports已清理"}
+
+        success_count = sum(1 for r in results.values() if r.get("success"))
+        total_count = len(results)
+
+        return StepResult(
+            step_id=self.step_id,
+            step_name=self.step_name,
+            status=StepStatus.SUCCESS if success_count == total_count else StepStatus.FAILED,
+            message=f"NFS取消共享完成，成功: {success_count}/{total_count}",
+            details={
+                "action": "unshare",
+                "server_ip": server_ip,
+                "export_path": export_path,
+                "client_mount": client_mount,
+            },
+            host_results=results
+        )
+
+    def _remove_fstab_entry(self, host: str, server_ip: str, export_path: str, client_mount: str):
+        """
+        从客户端的fstab中移除NFS挂载条目
+
+        Args:
+            host: 客户端IP
+            server_ip: NFS服务器IP
+            export_path: 导出路径
+            client_mount: 客户端挂载路径
+        """
+        # 使用多种模式匹配，确保能删除fstab中的NFS条目
+        # 匹配 server_ip:export_path
+        fstab_pattern = f"{server_ip}:{export_path}"
+        sed_cmd = f"grep -q '{fstab_pattern}' /etc/fstab && sed -i '\\|{fstab_pattern}|d' /etc/fstab || true"
+        self.execute_on_host(host, sed_cmd, sudo=True)
+        self.logger.info(f"[{host}] fstab中NFS条目已清理")
+
     def is_configured(self, host: str) -> tuple:
         """
         检查NFS是否已配置
@@ -249,6 +424,25 @@ class NFSConfig(BaseStep):
 
         # 检查当前节点是否是NFS服务器
         node = self.config.get_node_by_ip(host) or self.config.get_node_by_hostname(host)
+
+        if nfs_config.action == "unshare":
+            # unshare模式：检查是否已卸载
+            if node and node.hostname == nfs_server.hostname:
+                # 服务器端：检查exports中是否还有条目
+                result = self.execute_on_host(host, f"grep -q '{nfs_config.export_path}' /etc/exports 2>/dev/null && echo 'has_exports' || echo 'no_exports'", timeout=30)
+                stdout = result.get("stdout", "").strip()
+                if stdout == "no_exports":
+                    return True, "NFS服务器端exports已清理"
+                return False, "NFS服务器端exports尚未清理"
+
+            # 客户端：检查是否已卸载
+            result = self.execute_on_host(host, f"mount | grep -q '{server_ip}:{nfs_config.export_path}' && echo 'mounted' || echo 'not_mounted'", timeout=30)
+            stdout = result.get("stdout", "").strip()
+            if stdout == "not_mounted":
+                return True, f"NFS客户端已卸载: {client_mount}"
+            return False, f"NFS客户端仍处于挂载状态: {client_mount}"
+
+        # share模式（默认）
         if node and node.hostname == nfs_server.hostname:
             # 服务器端检查
             result = self.execute_on_host(host, "systemctl is-active nfs-server 2>/dev/null || echo 'inactive'", timeout=30)
@@ -282,7 +476,17 @@ class NFSConfig(BaseStep):
         if not server_ip:
             return False
 
-        # 检查服务器
+        if nfs_config.action == "unshare":
+            # unshare模式：验证已卸载
+            # 检查exports是否已清理
+            check_exports = f"grep -q '{nfs_config.export_path}' /etc/exports 2>/dev/null && echo 'has_exports' || echo 'no_exports'"
+            result = self.execute_on_host(server_ip, check_exports)
+            if result.get("stdout", "").strip() == "has_exports":
+                self.logger.warning("服务器端exports尚未完全清理")
+                return False
+            return True
+
+        # share模式：检查服务器
         server_verify = f"showmount -e {server_ip}"
         result = self.execute_on_host(server_ip, server_verify)
         return result.get("success", False)

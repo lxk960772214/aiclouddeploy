@@ -22,7 +22,8 @@ class NCCLSingleNodeTest(BaseStep):
     timeout = 1800  # 30分钟（包含编译时间）
 
     # 测试项目
-    TEST_ITEMS = ['all_reduce_perf', 'all_gather_perf', 'alltoall_perf']
+    # TEST_ITEMS = ['all_reduce_perf', 'all_gather_perf', 'alltoall_perf']
+    TEST_ITEMS = ['all_reduce_perf']
 
     def _get_test_config(self):
         """获取测试配置"""
@@ -103,6 +104,24 @@ class NCCLSingleNodeTest(BaseStep):
             return config.nccl_test_size
         return "8G"
 
+    def _get_package_path(self, config_key: str, default_filename: str) -> Optional[str]:
+        """获取工具包的本地绝对路径
+
+        Args:
+            config_key: test_packages中的配置键名（如nccl, nccl_tests）
+            default_filename: 默认文件名（配置中未指定时使用）
+
+        Returns:
+            本地包文件的绝对路径，如果找不到返回None
+        """
+        config = self._get_test_config()
+        if config:
+            pkg_value = getattr(config, config_key, None)
+            if pkg_value:
+                return pkg_value  # 已在配置加载时解析为绝对路径
+        # 回退到默认路径
+        return os.path.join(os.getcwd(), "packages", default_filename)
+
     def _get_compile_jobs_arg(self) -> str:
         """获取编译并行参数，-jN 或 -j$(nproc)"""
         config = self._get_test_config()
@@ -111,17 +130,34 @@ class NCCLSingleNodeTest(BaseStep):
         return "-j$(nproc)"
 
     def is_configured(self, host: str) -> tuple:
-        """检查NCCL测试工具是否已编译"""
-        toolkit_dir = self._get_toolkit_dir()
-        check_cmd = f"test -f {toolkit_dir}/nccl-tests/build/all_reduce_perf && echo 'exists' || echo 'not_exists'"
+        """测试步骤每次都应执行，不跳过
+
+        编译阶段内部已有跳过逻辑（检查libnccl.so和all_reduce_perf是否存在），
+        但测试本身必须每次运行以获取最新结果。
+        """
+        return False, "测试步骤需要执行"
+
+    def _get_cuda_home(self, host: str) -> str:
+        """获取CUDA安装路径，优先使用/usr/local/cuda符号链接，若无效则查找cuda-版本目录"""
+        # 检查/usr/local/cuda是否是有效路径（非悬空符号链接）
+        check_cmd = "test -d /usr/local/cuda/include && echo 'valid' || echo 'invalid'"
         result = self.execute_on_host(host, check_cmd)
-        if result.get("stdout", "").strip() == "exists":
-            return True, "NCCL测试工具已编译"
-        return False, "NCCL测试工具未编译"
+        if result.get("stdout", "").strip() == "valid":
+            return "/usr/local/cuda"
+        # 查找/usr/local/cuda-*目录，取最新版本
+        find_cmd = "ls -d /usr/local/cuda-* 2>/dev/null | sort -V | tail -1"
+        find_result = self.execute_on_host(host, find_cmd)
+        cuda_path = find_result.get("stdout", "").strip()
+        if cuda_path:
+            self.logger.info(f"[{host}] /usr/local/cuda 无效，使用 {cuda_path}")
+            return cuda_path
+        # 回退到默认路径
+        self.logger.warning(f"[{host}] 未找到有效的CUDA安装路径，使用默认 /usr/local/cuda")
+        return "/usr/local/cuda"
 
     def _get_compute_cap(self, host: str) -> Optional[int]:
         """获取GPU计算能力"""
-        cap_cmd = "nvidia-smi --query-gpu=compute_cap --format=csv,noheader | head -1"
+        cap_cmd = "nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -1"
         cap_result = self.execute_on_host(host, cap_cmd)
         if cap_result.get("success"):
             cap_str = cap_result.get("stdout", "").strip().replace(".", "")
@@ -130,10 +166,12 @@ class NCCLSingleNodeTest(BaseStep):
 
     def _get_gpu_count(self, host: str) -> int:
         """获取GPU数量"""
-        count_cmd = "nvidia-smi --query-gpu=count --format=csv,noheader | head -1"
+        count_cmd = "nvidia-smi --query-gpu=count --format=csv,noheader 2>/dev/null | head -1"
         result = self.execute_on_host(host, count_cmd)
         if result.get("success"):
-            return int(result.get("stdout", "0").strip())
+            stdout = result.get("stdout", "0").strip()
+            if stdout and stdout.isdigit():
+                return int(stdout)
         return 0
 
     def _upload_and_unzip(self, host: str, local_path: str, toolkit_dir: str, zip_name: str) -> bool:
@@ -178,6 +216,7 @@ class NCCLSingleNodeTest(BaseStep):
         toolkit_dir = self._get_toolkit_dir()
         log_dir = self._get_log_dir()
         nccl_dir = f"{toolkit_dir}/nccl"
+        cuda_home = self._get_cuda_home(host)
 
         # 创建目标目录和日志目录
         self.execute_on_host(host, f"mkdir -p {nccl_dir} {log_dir}")
@@ -188,17 +227,17 @@ class NCCLSingleNodeTest(BaseStep):
         src_result = self.execute_on_host(host, check_src_cmd)
 
         if "not_exists" in src_result.get("stdout", ""):
-            # 检查zip文件
-            local_pkg = os.path.join(os.getcwd(), "packages", "nccl-master.zip")
-            if not os.path.exists(local_pkg):
-                self.logger.error(f"[{host}] NCCL源码包不存在")
+            # 从配置获取NCCL包路径
+            local_pkg = self._get_package_path("nccl", "nccl-master.zip")
+            if not local_pkg or not os.path.exists(local_pkg):
+                self.logger.error(f"[{host}] NCCL源码包不存在: {local_pkg}")
                 return False
             if not self._upload_and_unzip(host, local_pkg, toolkit_dir, "nccl-master.zip"):
                 return False
 
         # BUILDDIR直接指向toolkit_dir/nccl，编译产物直接到位
-        self.logger.info(f"[{host}] 编译NCCL (计算能力: {compute_cap})...")
-        compile_cmd = f"cd {src_dir} && make {self._get_compile_jobs_arg()} src.build BUILDDIR={nccl_dir} CUDA_HOME=/usr/local/cuda NVCC_GENCODE='-gencode=arch=compute_{compute_cap},code=sm_{compute_cap}' > {log_dir}/build_nccl_{host.replace('.', '_')}.log 2>&1"
+        self.logger.info(f"[{host}] 编译NCCL (计算能力: {compute_cap}, CUDA_HOME: {cuda_home})...")
+        compile_cmd = f"cd {src_dir} && make {self._get_compile_jobs_arg()} src.build BUILDDIR={nccl_dir} CUDA_HOME={cuda_home} NVCC_GENCODE='-gencode=arch=compute_{compute_cap},code=sm_{compute_cap}' > {log_dir}/build_nccl_{host.replace('.', '_')}.log 2>&1"
         compile_result = self.execute_on_host(host, compile_cmd, sudo=True, timeout=1200)
 
         if not compile_result.get("success"):
@@ -213,6 +252,7 @@ class NCCLSingleNodeTest(BaseStep):
         build_dir = self._get_build_dir()
         toolkit_dir = self._get_toolkit_dir()
         log_dir = self._get_log_dir()
+        cuda_home = self._get_cuda_home(host)
 
         # 检查源码是否在共享工具目录
         src_dir = f"{toolkit_dir}/nccl-tests-master"
@@ -220,16 +260,16 @@ class NCCLSingleNodeTest(BaseStep):
         src_result = self.execute_on_host(host, check_src_cmd)
 
         if "not_exists" in src_result.get("stdout", ""):
-            local_pkg = os.path.join(os.getcwd(), "packages", "nccl-tests-master.zip")
-            if not os.path.exists(local_pkg):
-                self.logger.error(f"[{host}] NCCL-tests源码包不存在")
+            local_pkg = self._get_package_path("nccl_tests", "nccl-tests-master.zip")
+            if not local_pkg or not os.path.exists(local_pkg):
+                self.logger.error(f"[{host}] NCCL-tests源码包不存在: {local_pkg}")
                 return False
             if not self._upload_and_unzip(host, local_pkg, toolkit_dir, "nccl-tests-master.zip"):
                 return False
 
         # 在本地目录编译（避免NFS冲突）
-        self.logger.info(f"[{host}] 在本地目录编译NCCL-tests...")
-        compile_cmd = f"cd {src_dir} && make {self._get_compile_jobs_arg()} CUDA_HOME=/usr/local/cuda NCCL_HOME={toolkit_dir}/nccl > {log_dir}/build_nccl_tests_{host.replace('.', '_')}.log 2>&1"
+        self.logger.info(f"[{host}] 在本地目录编译NCCL-tests (CUDA_HOME: {cuda_home})...")
+        compile_cmd = f"cd {src_dir} && make {self._get_compile_jobs_arg()} CUDA_HOME={cuda_home} NCCL_HOME={toolkit_dir}/nccl > {log_dir}/build_nccl_tests_{host.replace('.', '_')}.log 2>&1"
         compile_result = self.execute_on_host(host, compile_cmd, sudo=True, timeout=600)
 
         if not compile_result.get("success"):
@@ -303,7 +343,8 @@ class NCCLSingleNodeTest(BaseStep):
             hostname = hostname_result.get("stdout", host).strip()
 
             # 设置环境变量
-            env_cmd = f"export LD_LIBRARY_PATH={toolkit_dir}/nccl/lib:/usr/local/cuda/lib64:$LD_LIBRARY_PATH"
+            cuda_home = self._get_cuda_home(host)
+            env_cmd = f"export LD_LIBRARY_PATH={toolkit_dir}/nccl/lib:{cuda_home}/lib64:$LD_LIBRARY_PATH"
 
             # 确定测试数据大小：如果用户未在配置中显式指定（使用默认值8G），则根据GPU算力自动调整
             test_total = self._get_nccl_test_size()

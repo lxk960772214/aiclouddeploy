@@ -4,7 +4,7 @@
 
 import os
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 from src.steps.base import BaseStep, StepResult, StepStatus
 
 
@@ -18,6 +18,33 @@ class NCCLInstall(BaseStep):
     supports_batch = False
     can_skip = True
     timeout = 1800  # 30分钟
+
+    def _get_cuda_home(self, host: str) -> str:
+        """获取CUDA安装路径，优先使用/usr/local/cuda符号链接，若无效则查找cuda-版本目录"""
+        # 检查/usr/local/cuda是否是有效路径（非悬空符号链接）
+        check_cmd = "test -d /usr/local/cuda/include && echo 'valid' || echo 'invalid'"
+        result = self.execute_on_host(host, check_cmd)
+        if result.get("stdout", "").strip() == "valid":
+            return "/usr/local/cuda"
+        # 查找/usr/local/cuda-*目录，取最新版本
+        find_cmd = "ls -d /usr/local/cuda-* 2>/dev/null | sort -V | tail -1"
+        find_result = self.execute_on_host(host, find_cmd)
+        cuda_path = find_result.get("stdout", "").strip()
+        if cuda_path:
+            self.logger.info(f"[{host}] /usr/local/cuda 无效，使用 {cuda_path}")
+            return cuda_path
+        # 回退到默认路径
+        self.logger.warning(f"[{host}] 未找到有效的CUDA安装路径，使用默认 /usr/local/cuda")
+        return "/usr/local/cuda"
+
+    def _get_nccl_package_path(self) -> Optional[str]:
+        """从test_packages配置获取NCCL包的本地路径"""
+        if hasattr(self, 'versions') and self.versions and hasattr(self.versions, 'test_packages'):
+            tp = self.versions.test_packages
+            if tp and tp.nccl:
+                return tp.nccl  # 已在配置加载时解析为绝对路径
+        # 回退到默认路径
+        return os.path.join(os.getcwd(), "packages", "nccl-master.zip")
 
     def is_configured(self, host: str) -> tuple:
         """
@@ -62,15 +89,22 @@ class NCCLInstall(BaseStep):
 
         install_path = getattr(nccl_config, 'install_path', '/home/ubuntu/nccl')
         install_method = getattr(nccl_config, 'install_method', 'source')
-        local_file = getattr(nccl_config, 'local_file', None)
         compile_jobs = getattr(nccl_config, 'compile_jobs', None)  # None表示使用nproc
+
+        # 从test_packages获取NCCL包路径（替代nccl.local_file）
+        local_file = None
+        if install_method == "local_file":
+            local_file = self._get_nccl_package_path()
 
         for host in hosts:
             self.logger.info(f"[{host}] 开始安装NCCL...")
             self.logger.info(f"[{host}] 安装方式: {install_method}, 安装路径: {install_path}")
 
+            # 获取CUDA安装路径
+            cuda_home = self._get_cuda_home(host)
+
             # 1. 获取GPU计算能力
-            cap_cmd = "nvidia-smi --query-gpu=compute_cap --format=csv,noheader | head -1"
+            cap_cmd = "nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -1"
             cap_result = self.execute_on_host(host, cap_cmd)
 
             if not cap_result["success"]:
@@ -200,7 +234,7 @@ class NCCLInstall(BaseStep):
             compile_cmd = f'''
 cd {nccl_src_dir}
 mkdir -p {install_path}
-make {jobs_arg} src.build BUILDDIR={install_path} CUDA_HOME=/usr/local/cuda NVCC_GENCODE="-gencode=arch=compute_{compute_cap},code=sm_{compute_cap}"
+make {jobs_arg} src.build BUILDDIR={install_path} CUDA_HOME={cuda_home} NVCC_GENCODE="-gencode=arch=compute_{compute_cap},code=sm_{compute_cap}"
 '''
             compile_result = self.execute_on_host(host, compile_cmd, sudo=True, timeout=1200)
             results[host] = {"compile": compile_result}

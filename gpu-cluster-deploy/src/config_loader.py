@@ -109,7 +109,6 @@ class NCCLConfig:
     enabled: bool = False
     install_method: str = "source"  # source | package | local_file
     install_path: str = "/home/ubuntu/nccl"
-    local_file: Optional[str] = None  # 本地tar.gz文件路径
     download_url: Optional[str] = None  # 下载URL
     compile_jobs: Optional[int] = None  # 编译并行进程数，None表示使用nproc自动检测
 
@@ -120,6 +119,7 @@ class TestPackagesConfig:
     packages_dir: str = "packages"  # 工具包目录
     cublas_bench: Optional[str] = None  # CUBLAS测试工具
     gpu_burn: Optional[str] = None  # GPU Burn测试工具包
+    nccl: Optional[str] = None  # NCCL源码包（编译NCCL库用）
     nccl_tests: Optional[str] = None  # NCCL-tests测试工具包
     openmpi: Optional[str] = None  # OpenMPI包（多机测试）
     build_dir: str = "/tmp/gpu-test-build"  # 本地编译目录
@@ -277,9 +277,14 @@ class ConfigLoader:
                 password=auth_template_raw.get("password")
             )
 
+        # 解析 hosts_file 相对路径（基于 config_dir）
+        hosts_file = node_batch_raw.get("hosts_file")
+        if hosts_file and not os.path.isabs(hosts_file):
+            hosts_file = str((self.config_dir / hosts_file).resolve())
+
         node_batch = NodeBatchConfig(
             enabled=node_batch_raw.get("enabled", False),
-            hosts_file=node_batch_raw.get("hosts_file"),
+            hosts_file=hosts_file,
             hosts_content=node_batch_raw.get("hosts_content"),
             base_hostname_prefix=node_batch_raw.get("base_hostname_prefix", "node"),
             base_ip_prefix=node_batch_raw.get("base_ip_prefix", "10.0.0"),
@@ -294,6 +299,7 @@ class ConfigLoader:
         nfs_raw = raw.get("nfs", {})
         nfs = NFSConfig(
             enabled=nfs_raw.get("enabled", True),
+            action=nfs_raw.get("action", "share"),
             server=nfs_raw.get("server"),
             export_path=nfs_raw.get("export_path", "/ssd/nfs"),
             client_mount=nfs_raw.get("client_mount", "/data"),
@@ -441,7 +447,7 @@ class ConfigLoader:
         nodes = []
 
         try:
-            from utils.hosts_parser import HostsParser
+            from src.utils.hosts_parser import HostsParser
             parser = HostsParser()
 
             # 优先使用文件内容
@@ -466,11 +472,23 @@ class ConfigLoader:
                         format_disk=node_batch.storage_template.format_disk
                     )
 
+                # 从auth_template获取认证信息
+                auth_username = None
+                auth_password = None
+                auth_private_key = None
+                if node_batch.auth_template:
+                    auth_username = node_batch.auth_template.username
+                    auth_password = node_batch.auth_template.password
+                    auth_private_key = node_batch.auth_template.private_key
+
                 node = NodeConfig(
                     hostname=parsed_node['hostname'],
                     ip=parsed_node['ip'],
                     roles=node_batch.roles.copy(),
-                    storage=storage
+                    storage=storage,
+                    username=auth_username,
+                    password=auth_password,
+                    private_key=auth_private_key
                 )
                 nodes.append(node)
 
@@ -493,6 +511,15 @@ class ConfigLoader:
         """
         nodes = []
 
+        # 从auth_template获取认证信息
+        auth_username = None
+        auth_password = None
+        auth_private_key = None
+        if node_batch.auth_template:
+            auth_username = node_batch.auth_template.username
+            auth_password = node_batch.auth_template.password
+            auth_private_key = node_batch.auth_template.private_key
+
         for i in range(node_batch.start_index, node_batch.start_index + node_batch.count):
             hostname = f"{node_batch.base_hostname_prefix}{i:02d}"
             ip = f"{node_batch.base_ip_prefix}.{i}"
@@ -513,7 +540,10 @@ class ConfigLoader:
                 hostname=hostname,
                 ip=ip,
                 roles=node_batch.roles.copy(),
-                storage=storage
+                storage=storage,
+                username=auth_username,
+                password=auth_password,
+                private_key=auth_private_key
             )
             nodes.append(node)
 
@@ -722,7 +752,6 @@ class ConfigLoader:
             enabled=nccl_raw.get("enabled", False),
             install_method=nccl_raw.get("install_method", "source"),
             install_path=nccl_raw.get("install_path", "/home/ubuntu/nccl"),
-            local_file=nccl_raw.get("local_file", None),
             download_url=nccl_raw.get("download_url", None),
             compile_jobs=nccl_raw.get("compile_jobs", None)
         )
@@ -733,6 +762,7 @@ class ConfigLoader:
             packages_dir=test_raw.get("packages_dir", "packages"),
             cublas_bench=test_raw.get("cublas_bench", None),
             gpu_burn=test_raw.get("gpu_burn", None),
+            nccl=test_raw.get("nccl", None),
             nccl_tests=test_raw.get("nccl_tests", None),
             openmpi=test_raw.get("openmpi", None),
             build_dir=test_raw.get("build_dir", "/tmp/gpu-test-build"),
@@ -746,7 +776,7 @@ class ConfigLoader:
             compile_role=test_raw.get("compile_role", "test_compile")
         )
 
-        return VersionsConfig(
+        versions = VersionsConfig(
             cuda=cuda,
             nvidia_driver=nvidia_driver,
             mlnx_ofed=mlnx_ofed,
@@ -756,6 +786,56 @@ class ConfigLoader:
             nccl=nccl,
             test_packages=test_packages
         )
+
+        # 解析 local_file 相对路径为绝对路径
+        # 基准目录为 config_dir 的父目录（即项目根目录，gpu-cluster-deploy/）
+        self._resolve_local_file_paths(versions)
+
+        return versions
+
+    def _resolve_local_file_paths(self, config: VersionsConfig):
+        """
+        将 local_file 中的相对路径解析为绝对路径
+
+        相对路径基于项目根目录（config_dir 的父目录）解析。
+        例如: "packages/xxx.zip" → "/path/to/gpu-cluster-deploy/packages/xxx.zip"
+
+        同时解析 test_packages 中的目录路径和包路径。
+
+        Args:
+            config: 版本配置对象
+        """
+        # 项目根目录 = config_dir 的父目录（config/ 的上一级）
+        project_root = self.config_dir.parent.resolve()
+
+        # 解析顶层组件的 local_file
+        for attr_name in ['cuda', 'nvidia_driver', 'mlnx_ofed', 'nccl']:
+            component = getattr(config, attr_name, None)
+            if component and hasattr(component, 'local_file') and component.local_file:
+                local_file = component.local_file
+                if not os.path.isabs(local_file):
+                    abs_path = str(project_root / local_file)
+                    setattr(component, 'local_file', abs_path)
+
+        # 解析 test_packages 中的路径
+        tp = config.test_packages
+        if tp:
+            # 解析 packages_dir：相对路径基于项目根目录
+            if tp.packages_dir and not os.path.isabs(tp.packages_dir):
+                tp.packages_dir = str(project_root / tp.packages_dir)
+
+            # 解析目录路径：build_dir, toolkit_dir, result_dir, log_dir
+            for dir_attr in ['build_dir', 'toolkit_dir', 'result_dir', 'log_dir']:
+                dir_val = getattr(tp, dir_attr, None)
+                if dir_val and not os.path.isabs(dir_val):
+                    setattr(tp, dir_attr, str(project_root / dir_val))
+
+            # 解析包路径：相对路径基于 packages_dir
+            packages_dir = tp.packages_dir  # 已解析为绝对路径
+            for pkg_attr in ['cublas_bench', 'gpu_burn', 'nccl', 'nccl_tests', 'openmpi']:
+                pkg_val = getattr(tp, pkg_attr, None)
+                if pkg_val and not os.path.isabs(pkg_val):
+                    setattr(tp, pkg_attr, os.path.join(packages_dir, pkg_val))
 
     def validate(self) -> List[str]:
         """验证配置完整性"""

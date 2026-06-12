@@ -69,6 +69,23 @@ class NCCLMultiNodeTest(BaseStep):
         config = self._get_test_config()
         return config.compile_role if config else "test_compile"
 
+    def _get_package_path(self, config_key: str, default_filename: str) -> Optional[str]:
+        """获取工具包的本地绝对路径
+
+        Args:
+            config_key: test_packages中的配置键名（如nccl, nccl_tests）
+            default_filename: 默认文件名（配置中未指定时使用）
+
+        Returns:
+            本地包文件的绝对路径，如果找不到返回None
+        """
+        config = self._get_test_config()
+        if config:
+            pkg_value = getattr(config, config_key, None)
+            if pkg_value:
+                return pkg_value  # 已在配置加载时解析为绝对路径
+        return os.path.join(os.getcwd(), "packages", default_filename)
+
     def _get_gpu_count(self, host: str) -> int:
         count_cmd = "nvidia-smi --query-gpu=count --format=csv,noheader | head -1"
         result = self.execute_on_host(host, count_cmd)
@@ -102,6 +119,24 @@ class NCCLMultiNodeTest(BaseStep):
                 compile_hosts = [hosts[0]]
             return compile_hosts
         return [hosts[0]] if hosts else []
+
+    def _get_cuda_home(self, host: str) -> str:
+        """获取CUDA安装路径，优先使用/usr/local/cuda符号链接，若无效则查找cuda-版本目录"""
+        # 检查/usr/local/cuda是否是有效路径（非悬空符号链接）
+        check_cmd = "test -d /usr/local/cuda/include && echo 'valid' || echo 'invalid'"
+        result = self.execute_on_host(host, check_cmd)
+        if result.get("stdout", "").strip() == "valid":
+            return "/usr/local/cuda"
+        # 查找/usr/local/cuda-*目录，取最新版本
+        find_cmd = "ls -d /usr/local/cuda-* 2>/dev/null | sort -V | tail -1"
+        find_result = self.execute_on_host(host, find_cmd)
+        cuda_path = find_result.get("stdout", "").strip()
+        if cuda_path:
+            self.logger.info(f"[{host}] /usr/local/cuda 无效，使用 {cuda_path}")
+            return cuda_path
+        # 回退到默认路径
+        self.logger.warning(f"[{host}] 未找到有效的CUDA安装路径，使用默认 /usr/local/cuda")
+        return "/usr/local/cuda"
 
     def _get_hostname(self, host: str) -> str:
         result = self.execute_on_host(host, "hostname")
@@ -454,7 +489,6 @@ class NCCLMultiNodeTest(BaseStep):
         install_dir = f"{toolkit_dir}/openmpi"
 
         openmpi_pkg = config.openmpi if config else "openmpi-4.1.8.tar.gz"
-        packages_dir = config.packages_dir if config else "packages"
 
         # 检查是否已安装
         check_cmd = f"test -f {install_dir}/bin/mpirun && echo 'exists' || echo 'not_exists'"
@@ -464,8 +498,9 @@ class NCCLMultiNodeTest(BaseStep):
             return True
 
         # 上传并解压OpenMPI源码
-        local_pkg = os.path.join(os.getcwd(), packages_dir, openmpi_pkg)
-        if not os.path.exists(local_pkg):
+        local_pkg = self._get_package_path("openmpi", "openmpi-4.1.8.tar.gz")
+        openmpi_pkg = os.path.basename(local_pkg) if local_pkg else openmpi_pkg
+        if not local_pkg or not os.path.exists(local_pkg):
             self.logger.error(f"[{host}] OpenMPI源码包不存在: {local_pkg}")
             return False
 
@@ -480,7 +515,8 @@ class NCCLMultiNodeTest(BaseStep):
         self.logger.info(f"[{host}] 编译OpenMPI (安装路径: {install_dir})...")
         self.execute_on_host(host, f"mkdir -p {install_dir} {log_dir}")
 
-        configure_cmd = f"cd {src_dir} && ./configure --prefix={install_dir} --with-cuda=/usr/local/cuda --without-fs-gpfs --without-gpfs > {log_dir}/build_openmpi_configure.log 2>&1"
+        cuda_home = self._get_cuda_home(host)
+        configure_cmd = f"cd {src_dir} && ./configure --prefix={install_dir} --with-cuda={cuda_home} --without-fs-gpfs --without-gpfs > {log_dir}/build_openmpi_configure.log 2>&1"
         result = self.execute_on_host(host, configure_cmd, sudo=True, timeout=600)
         if not result.get("success"):
             self.logger.error(f"[{host}] OpenMPI configure失败")
@@ -513,12 +549,11 @@ class NCCLMultiNodeTest(BaseStep):
             self.logger.info(f"[{host}] NCCL已编译，跳过")
             return True
 
-        config = self._get_test_config()
-        packages_dir = config.packages_dir if config else "packages"
-        nccl_pkg_name = "nccl-master.zip"
-        local_pkg = os.path.join(os.getcwd(), packages_dir, nccl_pkg_name)
+        # 从配置获取NCCL包路径
+        local_pkg = self._get_package_path("nccl", "nccl-master.zip")
+        nccl_pkg_name = os.path.basename(local_pkg) if local_pkg else "nccl-master.zip"
 
-        if not os.path.exists(local_pkg):
+        if not local_pkg or not os.path.exists(local_pkg):
             self.logger.error(f"[{host}] NCCL源码包不存在: {local_pkg}")
             return False
 
@@ -529,7 +564,8 @@ class NCCLMultiNodeTest(BaseStep):
         self.execute_on_host(host, f"mkdir -p {nccl_dir} {log_dir}")
 
         # BUILDDIR直接指向toolkit_dir/nccl，编译产物直接到位
-        compile_cmd = f"cd {src_dir} && make {self._get_compile_jobs_arg()} src.build BUILDDIR={nccl_dir} CUDA_HOME=/usr/local/cuda NVCC_GENCODE='-gencode=arch=compute_{compute_cap},code=sm_{compute_cap}' > {log_dir}/build_nccl_multinode.log 2>&1"
+        cuda_home = self._get_cuda_home(host)
+        compile_cmd = f"cd {src_dir} && make {self._get_compile_jobs_arg()} src.build BUILDDIR={nccl_dir} CUDA_HOME={cuda_home} NVCC_GENCODE='-gencode=arch=compute_{compute_cap},code=sm_{compute_cap}' > {log_dir}/build_nccl_multinode.log 2>&1"
         result = self.execute_on_host(host, compile_cmd, sudo=True, timeout=1200)
         if not result.get("success"):
             self.logger.error(f"[{host}] NCCL编译失败")
@@ -551,12 +587,11 @@ class NCCLMultiNodeTest(BaseStep):
             self.logger.info(f"[{host}] NCCL-tests(MPI版)已编译，跳过")
             return True
 
-        config = self._get_test_config()
-        packages_dir = config.packages_dir if config else "packages"
-        nccl_tests_pkg = "nccl-tests-master.zip"
-        local_pkg = os.path.join(os.getcwd(), packages_dir, nccl_tests_pkg)
+        # 从配置获取NCCL-tests包路径
+        local_pkg = self._get_package_path("nccl_tests", "nccl-tests-master.zip")
+        nccl_tests_pkg = os.path.basename(local_pkg) if local_pkg else "nccl-tests-master.zip"
 
-        if not os.path.exists(local_pkg):
+        if not local_pkg or not os.path.exists(local_pkg):
             self.logger.error(f"[{host}] NCCL-tests源码包不存在: {local_pkg}")
             return False
 
@@ -595,7 +630,8 @@ class NCCLMultiNodeTest(BaseStep):
 
         # 使用OpenMPI编译NCCL-tests
         openmpi_dir = f"{toolkit_dir}/openmpi"
-        compile_cmd = f"cd {mpi_src_dir} && make {self._get_compile_jobs_arg()} MPI=1 MPI_HOME={openmpi_dir} CUDA_HOME=/usr/local/cuda NCCL_HOME={toolkit_dir}/nccl > {log_dir}/build_nccl_tests_mpi.log 2>&1"
+        cuda_home = self._get_cuda_home(host)
+        compile_cmd = f"cd {mpi_src_dir} && make {self._get_compile_jobs_arg()} MPI=1 MPI_HOME={openmpi_dir} CUDA_HOME={cuda_home} NCCL_HOME={toolkit_dir}/nccl > {log_dir}/build_nccl_tests_mpi.log 2>&1"
         result = self.execute_on_host(host, compile_cmd, sudo=True, timeout=600)
         if not result.get("success"):
             self.logger.error(f"[{host}] NCCL-tests(MPI版)编译失败")
@@ -701,7 +737,8 @@ class NCCLMultiNodeTest(BaseStep):
         nccl_tests_bin = f"{toolkit_dir}/nccl-tests-mpi/build/{test_item}"
 
         # LD_LIBRARY_PATH
-        ld_path = f"{toolkit_dir}/openmpi/lib:{toolkit_dir}/nccl/lib:/usr/local/cuda/lib64"
+        cuda_home = self._get_cuda_home(hosts[0] if hosts else "")
+        ld_path = f"{toolkit_dir}/openmpi/lib:{toolkit_dir}/nccl/lib:{cuda_home}/lib64"
 
         # 构建-x参数
         env_args = []

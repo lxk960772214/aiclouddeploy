@@ -50,7 +50,6 @@ class GPUBurnTest(BaseStep):
             if config.compile_jobs:
                 return f"-j{config.compile_jobs}"
         return "-j$(nproc)"
-        return 600
 
     def _get_cuda_version(self, host: str) -> Optional[str]:
         """获取CUDA版本"""
@@ -85,9 +84,9 @@ class GPUBurnTest(BaseStep):
         # 创建目录
         self.execute_on_host(host, f"mkdir -p {toolkit_dir} {log_dir}")
 
-        # 获取本地包路径
-        local_pkg = os.path.join(os.getcwd(), "packages", "gpu-burn-master.zip")
-        if not os.path.exists(local_pkg):
+        # 获取本地包路径（已在配置加载时解析为绝对路径）
+        local_pkg = self._get_package_path("gpu_burn", "gpu-burn-master.zip")
+        if not local_pkg or not os.path.exists(local_pkg):
             self.logger.error(f"[{host}] GPU Burn源码包不存在: {local_pkg}")
             return False
 
@@ -157,6 +156,23 @@ class GPUBurnTest(BaseStep):
         if result.get("stdout", "").strip() == "exists":
             return True, "GPU Burn工具已编译"
         return False, "GPU Burn工具未编译"
+
+    def _get_package_path(self, config_key: str, default_filename: str) -> Optional[str]:
+        """获取工具包的本地绝对路径
+
+        Args:
+            config_key: test_packages中的配置键名
+            default_filename: 默认文件名（配置中未指定时使用）
+
+        Returns:
+            本地包文件的绝对路径，如果找不到返回None
+        """
+        if hasattr(self, 'versions') and self.versions and hasattr(self.versions, 'test_packages'):
+            config = self.versions.test_packages
+            pkg_value = getattr(config, config_key, None)
+            if pkg_value:
+                return pkg_value  # 已在配置加载时解析为绝对路径
+        return os.path.join(os.getcwd(), "packages", default_filename)
 
     def execute(self, hosts: List[str]) -> StepResult:
         """执行GPU Burn测试"""
