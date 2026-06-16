@@ -22,6 +22,7 @@ from src.models.cluster import (
     IBWriteBWConfig,
     NodeBatchConfig,
     ClusterConfig,
+    DeploymentConfig,
     NICConfig,
     NICMappingConfig,
     NICRenameConfig,
@@ -395,6 +396,16 @@ class ConfigLoader:
             public_key=ssh_key_raw.get("public_key")
         )
 
+        # 解析部署执行配置
+        deployment_raw = raw.get("deployment", {})
+        deployment = DeploymentConfig(
+            parallel=deployment_raw.get("parallel", True),
+            max_workers=deployment_raw.get("max_workers", 2),
+            timeout=deployment_raw.get("timeout", 300),
+            retry=deployment_raw.get("retry", 0),
+            continue_on_failure=deployment_raw.get("continue_on_failure", False)
+        )
+
         return ClusterConfig(
             name=cluster_raw.get("name", "gpu-cluster"),
             description=cluster_raw.get("description", ""),
@@ -405,7 +416,8 @@ class ConfigLoader:
             nfs=nfs,
             time_sync=time_sync,
             network=network,
-            ssh_key=ssh_key
+            ssh_key=ssh_key,
+            deployment=deployment
         )
 
     def _generate_batch_nodes(self, node_batch: NodeBatchConfig, overrides: List[Dict]) -> List[NodeConfig]:

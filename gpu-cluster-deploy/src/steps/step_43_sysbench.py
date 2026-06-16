@@ -5,7 +5,7 @@
 """
 
 import os
-from typing import List
+from typing import List, Dict, Any
 from src.steps.base import BaseStep, StepResult, StepStatus
 
 
@@ -42,78 +42,81 @@ class SysbenchCPUTest(BaseStep):
             return int(result.get("stdout", "1").strip())
         return 1
 
-    def execute(self, hosts: List[str]) -> StepResult:
-        """执行Sysbench CPU测试"""
-        results = {}
+    def _run_test_on_host(self, host: str) -> Dict[str, Any]:
+        """在单个节点运行Sysbench CPU测试"""
         result_dir = self._get_result_dir()
 
-        for host in hosts:
-            self.logger.info(f"[{host}] 开始Sysbench CPU测试...")
+        self.logger.info(f"[{host}] 开始Sysbench CPU测试...")
 
-            # 1. 检查sysbench是否安装
-            check_cmd = "which sysbench && echo 'installed' || echo 'not_installed'"
-            check_result = self.execute_on_host(host, check_cmd)
+        # 1. 检查sysbench是否安装
+        check_cmd = "which sysbench && echo 'installed' || echo 'not_installed'"
+        check_result = self.execute_on_host(host, check_cmd)
 
-            if check_result.get("stdout", "").strip() == "not_installed":
-                self.logger.info(f"[{host}] 安装sysbench...")
-                install_cmd = "apt update -qq && apt install -y sysbench"
-                install_result = self.execute_on_host(host, install_cmd, sudo=True)
-                if not install_result.get("success"):
-                    results[host] = {"success": False, "error": "sysbench安装失败"}
-                    continue
+        if check_result.get("stdout", "").strip() == "not_installed":
+            self.logger.info(f"[{host}] 安装sysbench...")
+            install_cmd = "apt update -qq && apt install -y sysbench"
+            install_result = self.execute_on_host(host, install_cmd, sudo=True)
+            if not install_result.get("success"):
+                return {"success": False, "error": "sysbench安装失败"}
 
-            # 2. 获取CPU核心数
-            cpu_cores = self._get_cpu_cores(host)
-            self.logger.info(f"[{host}] CPU核心数: {cpu_cores}")
+        # 2. 获取CPU核心数
+        cpu_cores = self._get_cpu_cores(host)
+        self.logger.info(f"[{host}] CPU核心数: {cpu_cores}")
 
-            # 3. 创建结果目录
-            self.execute_on_host(host, f"mkdir -p {result_dir}")
+        # 3. 创建结果目录
+        self.execute_on_host(host, f"mkdir -p {result_dir}")
 
-            # 4. 运行测试（线程数: 1, 2, 4, 8, 16, ... 直到CPU核心数）
-            hostname_cmd = "hostname"
-            hostname_result = self.execute_on_host(host, hostname_cmd)
-            hostname = hostname_result.get("stdout", host).strip()
+        # 4. 运行测试（线程数: 1, 2, 4, 8, 16, ... 直到CPU核心数）
+        hostname_cmd = "hostname"
+        hostname_result = self.execute_on_host(host, hostname_cmd)
+        hostname = hostname_result.get("stdout", host).strip()
 
-            test_results = []
-            thread = 1
-            while thread <= cpu_cores:
-                self.logger.info(f"[{host}] 测试线程数: {thread}")
+        test_results = []
+        thread = 1
+        while thread <= cpu_cores:
+            self.logger.info(f"[{host}] 测试线程数: {thread}")
 
-                # 运行sysbench CPU测试
-                test_cmd = f"sysbench --threads={thread} --time=30 --report-interval=2 cpu run 2>/dev/null | grep -E 'events per second:|min:|avg:|max:|95th percentile:' | tr '\\n' ','"
-                test_result = self.execute_on_host(host, test_cmd, timeout=60)
+            # 运行sysbench CPU测试
+            test_cmd = f"sysbench --threads={thread} --time=30 --report-interval=2 cpu run 2>/dev/null | grep -E 'events per second:|min:|avg:|max:|95th percentile:' | tr '\\n' ','"
+            test_result = self.execute_on_host(host, test_cmd, timeout=60)
 
-                if test_result.get("success"):
-                    perf_data = test_result.get("stdout", "").strip()
-                    # 去掉最后的逗号
-                    if perf_data.endswith(','):
-                        perf_data = perf_data[:-1]
-                    test_results.append({"threads": thread, "perf": perf_data})
-                    self.logger.info(f"[{host}] 线程数 {thread}: {perf_data}")
-                else:
-                    test_results.append({"threads": thread, "perf": "N/A"})
+            if test_result.get("success"):
+                perf_data = test_result.get("stdout", "").strip()
+                # 去掉最后的逗号
+                if perf_data.endswith(','):
+                    perf_data = perf_data[:-1]
+                test_results.append({"threads": thread, "perf": perf_data})
+                self.logger.info(f"[{host}] 线程数 {thread}: {perf_data}")
+            else:
+                test_results.append({"threads": thread, "perf": "N/A"})
 
-                thread *= 2
+            thread *= 2
 
-            # 5. 保存结果
-            result_lines = []
-            for r in test_results:
-                line = f"线程数: {r['threads']} | {r['perf']}"
-                result_lines.append(line)
+        # 5. 保存结果
+        result_lines = []
+        for r in test_results:
+            line = f"线程数: {r['threads']} | {r['perf']}"
+            result_lines.append(line)
 
-            result_file = f"{result_dir}/sysbench_{hostname}.log"
-            write_cmd = f"cat > {result_file} << 'EOF'\n" + "\n".join(result_lines) + "\nEOF"
-            self.execute_on_host(host, write_cmd)
+        result_file = f"{result_dir}/sysbench_{hostname}.log"
+        write_cmd = f"cat > {result_file} << 'EOF'\n" + "\n".join(result_lines) + "\nEOF"
+        self.execute_on_host(host, write_cmd)
 
-            results[host] = {"success": True, "cpu_cores": cpu_cores, "results": test_results}
+        return {"success": True, "cpu_cores": cpu_cores, "results": test_results}
+
+    def execute(self, hosts: List[str]) -> StepResult:
+        """执行Sysbench CPU测试"""
+        # 并行运行测试
+        self.logger.info("开始并行运行Sysbench CPU测试...")
+        results = self._run_on_hosts_parallel(hosts, self._run_test_on_host)
 
         success_count = sum(1 for r in results.values() if r.get("success"))
 
         return StepResult(
             step_id=self.step_id,
             step_name=self.step_name,
-            status=StepStatus.SUCCESS if success_count == len(hosts) else StepStatus.FAILED,
-            message=f"Sysbench CPU测试完成，成功: {success_count}/{len(hosts)}",
+            status=StepStatus.SUCCESS if success_count == len(results) else StepStatus.FAILED,
+            message=f"Sysbench CPU测试完成，成功: {success_count}/{len(results)}",
             host_results=results
         )
 
@@ -121,7 +124,7 @@ class SysbenchCPUTest(BaseStep):
         """验证测试结果"""
         result_dir = self._get_result_dir()
         for host in hosts:
-            check_cmd = f"test -f {result_dir}/sysbench_*.log"
+            check_cmd = f"ls {result_dir}/sysbench_*.log >/dev/null 2>&1"
             result = self.execute_on_host(host, check_cmd)
             if not result.get("success"):
                 return False

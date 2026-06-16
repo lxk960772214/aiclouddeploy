@@ -5,7 +5,7 @@
 """
 
 import os
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from src.steps.base import BaseStep, StepResult, StepStatus
 
 
@@ -63,80 +63,92 @@ class NCCLCardPairTest(BaseStep):
             return int(result.get("stdout", "0").strip())
         return 0
 
-    def execute(self, hosts: List[str]) -> StepResult:
-        """执行显卡两两配对测试"""
-        results = {}
+    def _run_test_on_host(self, host: str) -> Dict[str, Any]:
+        """在单个节点运行显卡配对测试"""
         toolkit_dir = self._get_toolkit_dir()
         result_dir = self._get_result_dir()
 
-        for host in hosts:
-            self.logger.info(f"[{host}] 开始NCCL显卡两两配对测试...")
+        self.logger.info(f"[{host}] 开始NCCL显卡两两配对测试...")
 
-            # 1. 获取GPU数量
-            gpu_count = self._get_gpu_count(host)
+        # 1. 获取GPU数量
+        gpu_count = self._get_gpu_count(host)
 
-            if gpu_count < 2:
-                self.logger.warning(f"[{host}] GPU数量不足({gpu_count})，跳过测试")
-                results[host] = {"success": True, "skipped": True, "reason": "GPU数量不足"}
-                continue
+        if gpu_count < 2:
+            self.logger.warning(f"[{host}] GPU数量不足({gpu_count})，跳过测试")
+            return {"success": True, "skipped": True, "reason": "GPU数量不足"}
 
-            self.logger.info(f"[{host}] GPU数量: {gpu_count}")
+        self.logger.info(f"[{host}] GPU数量: {gpu_count}")
 
-            # 2. 检查测试工具
-            check_cmd = f"test -f {toolkit_dir}/nccl-tests-master/build/all_reduce_perf && echo 'exists' || echo 'not_exists'"
-            tool_result = self.execute_on_host(host, check_cmd)
+        # 2. 检查测试工具
+        check_cmd = f"test -f {toolkit_dir}/nccl-tests-master/build/all_reduce_perf && echo 'exists' || echo 'not_exists'"
+        tool_result = self.execute_on_host(host, check_cmd)
 
-            if tool_result.get("stdout", "").strip() == "not_exists":
-                results[host] = {"success": False, "error": "NCCL-tests工具不存在，请先运行步骤41"}
-                continue
+        if tool_result.get("stdout", "").strip() == "not_exists":
+            return {"success": False, "error": "NCCL-tests工具不存在，请先运行步骤41"}
 
-            # 3. 创建结果目录
-            self.execute_on_host(host, f"mkdir -p {result_dir}")
+        # 3. 创建结果目录
+        self.execute_on_host(host, f"mkdir -p {result_dir}")
 
-            # 4. 生成配对列表（相邻卡配对 + 首尾配对）
-            pairs = []
-            for i in range(gpu_count - 1):
-                pairs.append(f"{i},{i+1}")
-            pairs.append(f"{gpu_count-1},0")  # 首尾配对
+        # 4. 生成配对列表（相邻卡配对 + 首尾配对）
+        pairs = []
+        for i in range(gpu_count - 1):
+            pairs.append(f"{i},{i+1}")
+        pairs.append(f"{gpu_count-1},0")  # 首尾配对
 
-            self.logger.info(f"[{host}] 测试配对: {pairs}")
+        self.logger.info(f"[{host}] 测试配对: {pairs}")
 
-            # 5. 设置环境变量
-            cuda_home = self._get_cuda_home(host)
-            env_cmd = f"export LD_LIBRARY_PATH={toolkit_dir}/nccl/lib:{cuda_home}/lib64:$LD_LIBRARY_PATH"
+        # 5. 设置环境变量
+        cuda_home = self._get_cuda_home(host)
+        env_cmd = f"export LD_LIBRARY_PATH={toolkit_dir}/nccl/lib:{cuda_home}/lib64:$LD_LIBRARY_PATH"
 
-            test_results = {}
-            hostname_cmd = "hostname"
-            hostname_result = self.execute_on_host(host, hostname_cmd)
-            hostname = hostname_result.get("stdout", host).strip()
+        test_results = {}
+        hostname_cmd = "hostname"
+        hostname_result = self.execute_on_host(host, hostname_cmd)
+        hostname = hostname_result.get("stdout", host).strip()
 
-            for pair in pairs:
-                self.logger.info(f"[{host}] 测试配对 GPU {pair}...")
+        for pair in pairs:
+            self.logger.info(f"[{host}] 测试配对 GPU {pair}...")
 
-                # 使用CUDA_VISIBLE_DEVICES隔离测试GPU
-                test_cmd = f"{env_cmd} && CUDA_VISIBLE_DEVICES={pair} {toolkit_dir}/nccl-tests-master/build/all_reduce_perf -b 8 -e 1G -f 2 -g 2 > {result_dir}/all_reduce_perf_pair_{pair}_{hostname}.log 2>&1"
-                test_result = self.execute_on_host(host, test_cmd, timeout=60)
+            # 使用CUDA_VISIBLE_DEVICES隔离测试GPU
+            test_cmd = f"{env_cmd} && CUDA_VISIBLE_DEVICES={pair} {toolkit_dir}/nccl-tests-master/build/all_reduce_perf -b 8 -e 1G -f 2 -g 2 > {result_dir}/all_reduce_perf_pair_{pair}_{hostname}.log 2>&1"
+            test_result = self.execute_on_host(host, test_cmd, timeout=60)
 
-                if test_result.get("success"):
-                    # 读取结果摘要
-                    read_cmd = f"tail -5 {result_dir}/all_reduce_perf_pair_{pair}_{hostname}.log"
-                    summary_result = self.execute_on_host(host, read_cmd)
-                    summary = summary_result.get("stdout", "")
-                    self.logger.info(f"[{host}] GPU {pair} 测试完成")
-                    test_results[pair] = {"success": True, "summary": summary}
-                else:
-                    self.logger.error(f"[{host}] GPU {pair} 测试失败")
-                    test_results[pair] = {"success": False}
+            if test_result.get("success"):
+                # 读取结果摘要
+                read_cmd = f"tail -5 {result_dir}/all_reduce_perf_pair_{pair}_{hostname}.log"
+                summary_result = self.execute_on_host(host, read_cmd)
+                summary = summary_result.get("stdout", "")
+                self.logger.info(f"[{host}] GPU {pair} 测试完成")
+                test_results[pair] = {"success": True, "summary": summary}
+            else:
+                self.logger.error(f"[{host}] GPU {pair} 测试失败")
+                test_results[pair] = {"success": False}
 
-            results[host] = {"success": True, "gpu_count": gpu_count, "pairs": test_results}
+        return {"success": True, "gpu_count": gpu_count, "pairs": test_results}
+
+    def execute(self, hosts: List[str]) -> StepResult:
+        """执行显卡两两配对测试"""
+        # 筛选有GPU的节点
+        gpu_hosts = self._get_gpu_hosts(hosts)
+        if not gpu_hosts:
+            return StepResult(
+                step_id=self.step_id,
+                step_name=self.step_name,
+                status=StepStatus.SKIPPED,
+                message="没有GPU节点，跳过测试"
+            )
+
+        # 并行运行测试
+        self.logger.info("开始并行运行NCCL显卡配对测试...")
+        results = self._run_on_hosts_parallel(gpu_hosts, self._run_test_on_host)
 
         success_count = sum(1 for r in results.values() if r.get("success"))
 
         return StepResult(
             step_id=self.step_id,
             step_name=self.step_name,
-            status=StepStatus.SUCCESS if success_count == len(hosts) else StepStatus.FAILED,
-            message=f"NCCL显卡配对测试完成，成功: {success_count}/{len(hosts)}",
+            status=StepStatus.SUCCESS if success_count == len(results) else StepStatus.FAILED,
+            message=f"NCCL显卡配对测试完成，成功: {success_count}/{len(results)}",
             host_results=results
         )
 

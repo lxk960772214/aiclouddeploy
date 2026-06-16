@@ -24,7 +24,7 @@ apt_mirror:
 nccl:
   enabled: true
   install_method: "local_file"
-  install_path: "/root/para/nccl"
+  install_path: "/root/liuxk/nccl"
   compile_jobs: 8  # 编译并行进程数，null表示自动(nproc)，可设置为固定值如 8
 
 # nccl:
@@ -44,23 +44,20 @@ test_packages:
   nccl_tests: "nccl-tests-master.zip"  # NCCL-tests测试工具包
   openmpi: "openmpi-4.1.8.tar.gz"  # 多机NCCL测试需要
 
-  # 编译目录：使用本地临时目录，避免NFS共享时的多节点编译冲突
-  # 每个节点独立编译，编译完成后复制到共享工具目录
   # 支持相对路径（基于项目根目录 gpu-cluster-deploy/），或绝对路径
-  build_dir: "test_run/build"  # 本地编译目录
+  build_dir: "/root/liuxk/test_run/build"  # 本地编译目录
 
   # 工具目录：存放编译好的工具（可放在NFS共享目录供所有节点使用）
-  # 如果是NFS目录，编译会在本地完成后复制到这里
   # 支持相对路径（基于项目根目录 gpu-cluster-deploy/），或绝对路径
-  toolkit_dir: "test_run/toolkit"  # 共享工具目录（可NFS）
+  toolkit_dir: "/root/liuxk/test_run/toolkit"  # 共享工具目录（可NFS）
 
   # 结果目录：测试结果存放位置
   # 支持相对路径（基于项目根目录 gpu-cluster-deploy/），或绝对路径
-  result_dir: "test_run/result"  # 测试结果目录
+  result_dir: "/root/liuxk/test_run/result"  # 测试结果目录
 
   # 日志目录：编译日志存放位置
   # 支持相对路径（基于项目根目录 gpu-cluster-deploy/），或绝对路径
-  log_dir: "test_run/logs"  # 编译日志目录
+  log_dir: "/root/liuxk/test_run/logs"  # 编译日志目录
 
   # GPU Burn测试配置
   gpuburn_duration: 600  # 测试时长(秒)

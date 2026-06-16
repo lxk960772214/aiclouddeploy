@@ -689,6 +689,62 @@ class NCCLMultiNodeTest(BaseStep):
 
         return True
 
+    def _check_nfs_shared(self, hosts: List[str], toolkit_dir: str) -> bool:
+        """
+        校验 toolkit_dir 是否在所有节点上通过 NFS 共享
+
+        检查逻辑：
+        1. 在第一个节点上创建一个临时标记文件
+        2. 在其他节点上检查该文件是否存在（NFS 共享则可见）
+        3. 清理标记文件
+
+        Args:
+            hosts: 主机列表
+            toolkit_dir: 工具目录路径
+
+        Returns:
+            bool: 是否所有节点都能通过 NFS 访问 toolkit_dir
+        """
+        if len(hosts) < 2:
+            return True
+
+        self.logger.info(f"[{self.step_id}] 校验 NFS 共享: {toolkit_dir}")
+
+        # 确保目录存在
+        first_host = hosts[0]
+        self.execute_on_host(first_host, f"mkdir -p {toolkit_dir}")
+
+        # 创建标记文件
+        marker = f"{toolkit_dir}/.nfs_check_{int(time.time())}"
+        create_result = self.execute_on_host(first_host, f"echo 'nfs_check' > {marker}")
+        if not create_result.get("success"):
+            self.logger.warning(f"[{self.step_id}] 无法在 {first_host} 创建标记文件，跳过 NFS 校验")
+            return True  # 不阻断，交给后续的 _ensure_tools_on_all_nodes 检查
+
+        # 在其他节点检查标记文件
+        nfs_ok = True
+        check_hosts = hosts[1:]  # 跳过第一个节点（创建者）
+        for host in check_hosts:
+            check_result = self.execute_on_host(host, f"test -f {marker} && echo 'found' || echo 'not_found'", timeout=10)
+            found = check_result.get("stdout", "").strip() == "found"
+            hostname = self._get_hostname(host)
+            if not found:
+                self.logger.error(
+                    f"[{self.step_id}] [{hostname}] 未检测到 NFS 共享: "
+                    f"在 {first_host} 创建的文件 {marker} 在该节点不可见。"
+                    f"请确保 {toolkit_dir} 已通过 NFS 挂载到所有节点"
+                )
+                nfs_ok = False
+            else:
+                self.logger.info(f"[{self.step_id}] [{hostname}] NFS 共享检查通过")
+
+        # 清理标记文件
+        self.execute_on_host(first_host, f"rm -f {marker}")
+
+        if nfs_ok:
+            self.logger.info(f"[{self.step_id}] NFS 共享校验通过: {toolkit_dir}")
+        return nfs_ok
+
     def _generate_hostfile(self, hosts: List[str], gpus_per_node: int) -> str:
         """生成MPI hostfile内容，使用IP地址确保跨节点可解析"""
         lines = []
@@ -790,16 +846,32 @@ class NCCLMultiNodeTest(BaseStep):
 
     def execute(self, hosts: List[str]) -> StepResult:
         """执行NCCL多节点测试"""
-        if len(hosts) < 2:
+        # 筛选有GPU的节点
+        gpu_hosts = self._get_gpu_hosts(hosts)
+
+        if len(gpu_hosts) < 2:
             return StepResult(
                 step_id=self.step_id,
                 step_name=self.step_name,
                 status=StepStatus.SKIPPED,
-                message="节点数不足2，无法执行多节点测试"
+                message="GPU节点不足2，无法执行多节点测试"
+            )
+
+        # 后续使用 gpu_hosts 替代 hosts
+        hosts = gpu_hosts
+
+        # 校验 NFS 共享：多节点测试要求 toolkit_dir 在 NFS 上，所有节点可访问
+        toolkit_dir = self._get_toolkit_dir()
+        if not self._check_nfs_shared(hosts, toolkit_dir):
+            return StepResult(
+                step_id=self.step_id,
+                step_name=self.step_name,
+                status=StepStatus.FAILED,
+                message=f"toolkit_dir ({toolkit_dir}) 未在所有节点通过 NFS 共享，多节点测试要求 NFS 环境。"
+                        f"请先配置 NFS (step 34) 或将 toolkit_dir 设为 NFS 挂载路径"
             )
 
         results = {}
-        toolkit_dir = self._get_toolkit_dir()
         result_dir = self._get_result_dir()
 
         # 1. 编译

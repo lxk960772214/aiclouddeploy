@@ -1,7 +1,7 @@
 """
 网络连通性检查模块
 
-检查主机的 IP 层、DNS 解析、HTTP 连接状态
+检查主机的内网互通性（节点间 ping）和外网连通性（DNS 解析、HTTP 连接）
 """
 
 import re
@@ -15,9 +15,9 @@ from src.utils.logger import get_logger
 
 class CheckType(Enum):
     """检查类型"""
-    IP = "ip"           # IP层连通性
-    DNS = "dns"         # DNS解析
-    HTTP = "http"       # HTTP连接
+    INTERNAL_PING = "internal_ping"   # 内网互通（节点间 ping）
+    DNS = "dns"                       # DNS解析
+    HTTP = "http"                     # HTTP连接
 
 
 @dataclass
@@ -40,37 +40,65 @@ class CheckResult:
 
 
 @dataclass
+class InternalPingResult:
+    """单次内网 ping 结果"""
+    target_host: str
+    success: bool
+    latency_ms: float = 0.0
+    message: str = ""
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "target_host": self.target_host,
+            "success": self.success,
+            "latency_ms": self.latency_ms,
+            "message": self.message
+        }
+
+
+@dataclass
 class HostConnectivityResult:
     """单台主机的连通性检查结果"""
     host: str
-    ip_check: CheckResult
-    dns_check: CheckResult
-    http_check: CheckResult
+    # 内网互通检查
+    internal_ping: CheckResult          # 内网互通总览
+    internal_ping_details: List[InternalPingResult] = field(default_factory=list)  # 逐节点 ping 详情
+    # 外网连通检查
+    dns_check: CheckResult = None
+    http_check: CheckResult = None
+
+    @property
+    def internal_passed(self) -> bool:
+        """内网互通是否全部通过"""
+        return self.internal_ping.success
+
+    @property
+    def external_passed(self) -> bool:
+        """外网连通是否全部通过"""
+        if self.dns_check is None and self.http_check is None:
+            return True  # 未检查外网，视为通过
+        results = []
+        if self.dns_check is not None:
+            results.append(self.dns_check.success)
+        if self.http_check is not None:
+            results.append(self.http_check.success)
+        return all(results)
 
     @property
     def all_passed(self) -> bool:
         """所有检查是否全部通过"""
-        return self.ip_check.success and self.dns_check.success and self.http_check.success
-
-    @property
-    def partial_passed(self) -> bool:
-        """是否有部分检查通过"""
-        return any([
-            self.ip_check.success,
-            self.dns_check.success,
-            self.http_check.success
-        ]) and not self.all_passed
+        return self.internal_passed and self.external_passed
 
     def to_dict(self) -> Dict[str, Any]:
         return {
             "host": self.host,
+            "internal_passed": self.internal_passed,
+            "external_passed": self.external_passed,
             "all_passed": self.all_passed,
-            "partial_passed": self.partial_passed,
-            "checks": {
-                "ip": self.ip_check.to_dict(),
-                "dns": self.dns_check.to_dict(),
-                "http": self.http_check.to_dict()
-            }
+            "internal_ping": self.internal_ping.to_dict(),
+            "internal_ping_details": [d.to_dict() for d in self.internal_ping_details],
+            "dns_check": self.dns_check.to_dict() if self.dns_check else None,
+            "http_check": self.http_check.to_dict() if self.http_check else None
         }
 
 
@@ -78,7 +106,6 @@ class ConnectivityChecker:
     """网络连通性检查器"""
 
     # 默认检查目标
-    DEFAULT_IP_TARGET = "8.8.8.8"
     DEFAULT_DNS_TARGET = "www.baidu.com"
     DEFAULT_HTTP_TARGET = "http://www.baidu.com"
 
@@ -100,52 +127,94 @@ class ConnectivityChecker:
         self.batch_executor = batch_executor
         self.logger = logger or get_logger()
 
-    def check_ip_connectivity(self, host: str, username: str, password: str,
-                              target: str = None) -> CheckResult:
+    def check_internal_ping(self, host: str, username: str, password: str,
+                            target_hosts: List[str]) -> CheckResult:
         """
-        检查IP层连通性
+        检查内网互通性（从 host ping 所有 target_hosts）
 
         Args:
-            host: 目标主机
+            host: 当前检查的主机
             username: SSH用户名
             password: SSH密码
-            target: ping目标，默认8.8.8.8
+            target_hosts: 需要 ping 的目标主机列表
 
         Returns:
-            CheckResult: 检查结果
+            CheckResult: 内网互通总览结果
         """
-        target = target or self.DEFAULT_IP_TARGET
-        cmd = f"ping -c {self.PING_COUNT} -W {self.PING_TIMEOUT} {target} 2>&1"
-
-        result = self.ssh_manager.execute_on_host(
-            host, cmd,
-            username=username,
-            password=password,
-            timeout=self.PING_COUNT * self.PING_TIMEOUT + 10
-        )
-
-        stdout = result.stdout or ""
-        stderr = result.stderr or ""
-
-        if result.success and "0% packet loss" in stdout:
-            # 解析延迟
-            latency = self._parse_ping_latency(stdout)
+        if not target_hosts:
             return CheckResult(
-                check_type=CheckType.IP,
+                check_type=CheckType.INTERNAL_PING,
                 success=True,
-                message=f"IP层连通正常，延迟 {latency:.1f}ms",
-                latency_ms=latency,
-                details={"target": target}
+                message="无内网目标需要检查",
+                details={}
             )
 
-        # 解析失败原因
-        error_msg = self._parse_ping_error(stdout or stderr)
-        return CheckResult(
-            check_type=CheckType.IP,
-            success=False,
-            message=f"IP层连通失败: {error_msg}",
-            details={"target": target, "error": error_msg}
-        )
+        details = []
+        success_count = 0
+        total_latency = 0.0
+
+        for target in target_hosts:
+            # 不 ping 自己
+            if target == host:
+                continue
+
+            cmd = f"ping -c {self.PING_COUNT} -W {self.PING_TIMEOUT} {target} 2>&1"
+            result = self.ssh_manager.execute_on_host(
+                host, cmd,
+                username=username,
+                password=password,
+                timeout=self.PING_COUNT * self.PING_TIMEOUT + 10
+            )
+
+            stdout = result.stdout or ""
+            stderr = result.stderr or ""
+
+            if result.success and "0% packet loss" in stdout:
+                latency = self._parse_ping_latency(stdout)
+                total_latency += latency
+                success_count += 1
+                details.append(InternalPingResult(
+                    target_host=target,
+                    success=True,
+                    latency_ms=latency,
+                    message=f"连通，延迟 {latency:.1f}ms"
+                ))
+            else:
+                error_msg = self._parse_ping_error(stdout or stderr)
+                details.append(InternalPingResult(
+                    target_host=target,
+                    success=False,
+                    message=f"不通: {error_msg}"
+                ))
+
+        # 统计结果（排除自身后的目标数）
+        expected_count = len([t for t in target_hosts if t != host])
+        if expected_count == 0:
+            return CheckResult(
+                check_type=CheckType.INTERNAL_PING,
+                success=True,
+                message="无其他内网节点需要检查",
+                details={"targets": details}
+            )
+
+        all_success = success_count == expected_count
+        if all_success:
+            avg_latency = total_latency / success_count if success_count > 0 else 0
+            return CheckResult(
+                check_type=CheckType.INTERNAL_PING,
+                success=True,
+                message=f"内网互通正常 ({success_count}/{expected_count})，平均延迟 {avg_latency:.1f}ms",
+                latency_ms=avg_latency,
+                details={"targets": details}
+            )
+        else:
+            failed_targets = [d.target_host for d in details if not d.success]
+            return CheckResult(
+                check_type=CheckType.INTERNAL_PING,
+                success=False,
+                message=f"内网互通异常 ({success_count}/{expected_count})，不可达: {', '.join(failed_targets)}",
+                details={"targets": details, "failed_targets": failed_targets}
+            )
 
     def check_dns_resolution(self, host: str, username: str, password: str,
                              target: str = None) -> CheckResult:
@@ -254,39 +323,46 @@ class ConnectivityChecker:
             details={"target": target, "error": stderr or "unknown"}
         )
 
-    def check_host(self, host: str, username: str, password: str) -> HostConnectivityResult:
+    def check_host(self, host: str, username: str, password: str,
+                   all_hosts: List[str] = None) -> HostConnectivityResult:
         """
-        执行单台主机的所有连通性检查（并行执行三种检查）
+        执行单台主机的所有连通性检查
 
         Args:
-            host: 目标主机
+            host: 当前检查的主机
             username: SSH用户名
             password: SSH密码
+            all_hosts: 所有内网主机列表（用于内网互通检查）
 
         Returns:
             HostConnectivityResult: 检查结果
         """
         self.logger.info(f"[ConnectivityCheck] 检查主机: {host}")
 
-        # 并行执行三种检查
+        # 并行执行内网互通和外网连通检查
         with ThreadPoolExecutor(max_workers=3) as executor:
-            future_ip = executor.submit(
-                self.check_ip_connectivity, host, username, password
+            # 内网互通检查
+            future_internal = executor.submit(
+                self.check_internal_ping, host, username, password,
+                all_hosts or [host]
             )
+            # 外网DNS检查
             future_dns = executor.submit(
                 self.check_dns_resolution, host, username, password
             )
+            # 外网HTTP检查
             future_http = executor.submit(
                 self.check_http_connection, host, username, password
             )
 
-            ip_result = future_ip.result()
+            internal_result = future_internal.result()
             dns_result = future_dns.result()
             http_result = future_http.result()
 
         return HostConnectivityResult(
             host=host,
-            ip_check=ip_result,
+            internal_ping=internal_result,
+            internal_ping_details=internal_result.details.get("targets", []),
             dns_check=dns_result,
             http_check=http_result
         )
@@ -301,13 +377,16 @@ class ConnectivityChecker:
         Returns:
             Dict[str, HostConnectivityResult]: 每个主机的检查结果
         """
+        # 提取所有主机 IP 列表，用于内网互通检查
+        all_host_ips = [h[0] for h in hosts]
+
         results = {}
         self.logger.info(f"[ConnectivityCheck] 开始检查 {len(hosts)} 台主机的网络连通性...")
 
         # 使用线程池并行检查多台主机
         with ThreadPoolExecutor(max_workers=min(len(hosts), 10)) as executor:
             futures = {
-                executor.submit(self.check_host, host, username, password): host
+                executor.submit(self.check_host, host, username, password, all_host_ips): host
                 for host, username, password in hosts
             }
 
@@ -319,15 +398,15 @@ class ConnectivityChecker:
                     self.logger.error(f"[ConnectivityCheck] {host} 检查异常: {e}")
                     # 创建失败结果
                     failed_check = CheckResult(
-                        check_type=CheckType.IP,
+                        check_type=CheckType.INTERNAL_PING,
                         success=False,
                         message=f"检查异常: {str(e)}"
                     )
                     results[host] = HostConnectivityResult(
                         host=host,
-                        ip_check=failed_check,
-                        dns_check=failed_check,
-                        http_check=failed_check
+                        internal_ping=failed_check,
+                        dns_check=CheckResult(check_type=CheckType.DNS, success=False, message=f"检查异常: {str(e)}"),
+                        http_check=CheckResult(check_type=CheckType.HTTP, success=False, message=f"检查异常: {str(e)}")
                     )
 
         return results
@@ -366,7 +445,7 @@ class ConnectivityChecker:
 
 def generate_connectivity_report(results: Dict[str, HostConnectivityResult]) -> str:
     """
-    生成网络连通性检查报告
+    生成网络连通性检查报告（内网互通 + 外网连通分开统计）
 
     Args:
         results: 检查结果字典
@@ -374,59 +453,107 @@ def generate_connectivity_report(results: Dict[str, HostConnectivityResult]) -> 
     Returns:
         str: Markdown 格式的报告
     """
+    # ===== 统计 =====
+    internal_ok = sum(1 for r in results.values() if r.internal_passed)
+    external_ok = sum(1 for r in results.values() if r.external_passed)
+    all_ok = sum(1 for r in results.values() if r.all_passed)
+    failed = len(results) - all_ok
+
     lines = [
         "# 网络连通性检查报告",
         "",
         "## 检查结果汇总",
         "",
-        "| 主机 | IP层 | DNS | HTTP | 状态 |",
-        "|------|------|-----|------|------|",
+        "| 主机 | 内网互通 | DNS | HTTP | 状态 |",
+        "|------|----------|-----|------|------|",
     ]
 
-    # 统计
-    all_passed = sum(1 for r in results.values() if r.all_passed)
-    partial_passed = sum(1 for r in results.values() if r.partial_passed)
-    failed = len(results) - all_passed - partial_passed
-
     for host, result in sorted(results.items()):
-        ip_status = "✓" if result.ip_check.success else "✗"
-        dns_status = "✓" if result.dns_check.success else "✗"
-        http_status = "✓" if result.http_check.success else "✗"
+        internal_status = "✓" if result.internal_passed else "✗"
+        dns_status = "✓" if result.dns_check and result.dns_check.success else "✗"
+        http_status = "✓" if result.http_check and result.http_check.success else "✗"
 
         if result.all_passed:
             overall = "✅ 全部通过"
-        elif result.partial_passed:
-            overall = "⚠️ 部分通过"
+        elif result.internal_passed:
+            overall = "⚠️ 内网正常/外网不通"
         else:
-            overall = "❌ 失败"
+            overall = "❌ 内网异常"
 
         lines.append(
-            f"| {host} | {ip_status} | {dns_status} | {http_status} | {overall} |"
+            f"| {host} | {internal_status} | {dns_status} | {http_status} | {overall} |"
         )
 
-    # 添加汇总
     lines.extend([
         "",
-        f"**统计**: {all_passed} 全部通过, {partial_passed} 部分通过, {failed} 失败",
+        f"**统计**: 内网互通 {internal_ok}/{len(results)} 通过，外网连通 {external_ok}/{len(results)} 通过",
         ""
     ])
 
-    # 添加失败详情
-    failed_hosts = {h: r for h, r in results.items() if not r.all_passed}
-    if failed_hosts:
+    # ===== 内网互通详情 =====
+    internal_failed = {h: r for h, r in results.items() if not r.internal_passed}
+    if internal_failed:
         lines.extend([
-            "## 失败详情",
+            "## 内网互通失败详情",
             ""
         ])
-
-        for host, result in sorted(failed_hosts.items()):
+        for host, result in sorted(internal_failed.items()):
             lines.append(f"### {host}")
-            if not result.ip_check.success:
-                lines.append(f"- **IP层**: {result.ip_check.message}")
-            if not result.dns_check.success:
+            lines.append(f"- **总览**: {result.internal_ping.message}")
+            for detail in result.internal_ping_details:
+                status = "✓" if detail.success else "✗"
+                lines.append(f"  - {status} → {detail.target_host}: {detail.message}")
+            lines.append("")
+
+    # ===== 外网连通详情 =====
+    external_failed = {h: r for h, r in results.items()
+                       if not r.external_passed and r.internal_passed}
+    if external_failed:
+        lines.extend([
+            "## 外网连通失败详情（内网正常但外网不通的节点）",
+            ""
+        ])
+        for host, result in sorted(external_failed.items()):
+            lines.append(f"### {host}")
+            if result.dns_check and not result.dns_check.success:
                 lines.append(f"- **DNS**: {result.dns_check.message}")
-            if not result.http_check.success:
+            if result.http_check and not result.http_check.success:
                 lines.append(f"- **HTTP**: {result.http_check.message}")
             lines.append("")
+
+    # ===== 内网互通矩阵 =====
+    lines.extend([
+        "## 内网互通矩阵",
+        ""
+    ])
+
+    all_hosts = sorted(results.keys())
+    if all_hosts:
+        # 表头
+        header = "| 源 \\ 目 | " + " | ".join(all_hosts) + " |"
+        separator = "|" + "---|" * (len(all_hosts) + 1)
+        lines.append(header)
+        lines.append(separator)
+
+        # 表体
+        for src in all_hosts:
+            row = f"| {src} |"
+            result = results[src]
+            for dst in all_hosts:
+                if src == dst:
+                    row += " - |"
+                else:
+                    # 从详情中查找
+                    found = False
+                    for detail in result.internal_ping_details:
+                        if detail.target_host == dst:
+                            row += " ✓ |" if detail.success else " ✗ |"
+                            found = True
+                            break
+                    if not found:
+                        row += " ? |"
+            lines.append(row)
+
+        lines.append("")
 
     return "\n".join(lines)

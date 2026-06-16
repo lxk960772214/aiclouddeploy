@@ -157,18 +157,22 @@ class NFSConfig(BaseStep):
         mkdir_cmd = f"mkdir -p {export_path}"
         self.execute_on_host(server_ip, mkdir_cmd, sudo=True)
 
-        # 配置exports（避免重复添加）
-        client_ips_str = ",".join(client_ips)
-        exports_entry = f"{export_path} {client_ips_str}(rw,sync,no_subtree_check)"
-        # 先检查是否已存在相同的exports条目
+        # 配置exports（每个客户端IP一行，避免格式问题）
+        # 先清理已有的该 export_path 条目
         check_exports_cmd = f"grep -q '{export_path}' /etc/exports 2>/dev/null && echo 'exists' || echo 'not_exists'"
         check_result = self.execute_on_host(server_ip, check_exports_cmd, sudo=True)
 
-        if check_result.get("stdout", "").strip() != "exists":
+        if check_result.get("stdout", "").strip() == "exists":
+            # 先移除旧条目再添加新条目，避免重复
+            self.logger.info(f"[{server_ip}] exports条目已存在，先清理再重新添加")
+            sed_cmd = f"sed -i '\\|{export_path}|d' /etc/exports"
+            self.execute_on_host(server_ip, sed_cmd, sudo=True)
+
+        # 每个客户端IP一行
+        for client_ip in client_ips:
+            exports_entry = f"{export_path} {client_ip}(rw,sync,no_subtree_check,no_root_squash)"
             exports_cmd = f'echo "{exports_entry}" >> /etc/exports'
             self.execute_on_host(server_ip, exports_cmd, sudo=True)
-        else:
-            self.logger.info(f"[{server_ip}] exports条目已存在，跳过添加")
 
         # 重启NFS服务
         restart_nfs_cmd = "systemctl restart nfs-server && systemctl enable nfs-server && exportfs -arv"
@@ -198,13 +202,13 @@ class NFSConfig(BaseStep):
             self.execute_on_host(host, mkdir_cmd, sudo=True)
 
             # 挂载NFS（使用服务器存储网IP）
-            mount_cmd = f"mount -t nfs -o rw,sync,hard,intr,timeo=5,retrans=3 {server_ip}:{export_path} {client_mount}"
+            mount_cmd = f"mount -t nfs {server_ip}:{export_path} {client_mount}"
             mount_result = self.execute_on_host(host, mount_cmd, sudo=True)
 
-            # 添加到fstab
-            fstab_entry = f"{server_ip}:{export_path} {client_mount} nfs rw,sync,hard,intr,timeo=5,retrans=3 0 0"
-            fstab_cmd = f'grep -q "{fstab_entry}" /etc/fstab || echo "{fstab_entry}" >> /etc/fstab'
-            self.execute_on_host(host, fstab_cmd, sudo=True)
+            # # 添加到fstab
+            # fstab_entry = f"{server_ip}:{export_path} {client_mount} nfs rw,sync,hard,intr,timeo=5,retrans=3 0 0"
+            # fstab_cmd = f'grep -q "{fstab_entry}" /etc/fstab || echo "{fstab_entry}" >> /etc/fstab'
+            # self.execute_on_host(host, fstab_cmd, sudo=True)
 
             # 验证挂载
             verify_cmd = f"df -h {client_mount}"

@@ -544,9 +544,61 @@ class BaseStep(ABC):
         # 否则使用登录用户
         return self._get_login_user(host)
 
+    def _get_gpu_hosts(self, hosts: List[str]) -> List[str]:
+        """筛选有GPU的节点（排除跳转服务器等无GPU节点）"""
+        gpu_hosts = []
+        for host in hosts:
+            gpu_count_cmd = "nvidia-smi --query-gpu=count --format=csv,noheader 2>/dev/null | head -1"
+            result = self.ssh_manager.execute_on_host(
+                host, gpu_count_cmd,
+                username=self._get_login_user(host),
+                timeout=10
+            )
+            stdout = result.stdout.strip() if result.stdout else ""
+            if stdout and stdout.isdigit() and int(stdout) > 0:
+                gpu_hosts.append(host)
+            else:
+                self.logger.info(f"[{host}] 无GPU，跳过")
+        return gpu_hosts
+
+    def _get_max_workers(self, host_count: int) -> int:
+        """从配置获取最大并行数"""
+        deployment = getattr(self.config, 'deployment', None)
+        max_workers = deployment.max_workers if deployment else 2
+        return min(host_count, max_workers)
+
+    def _run_on_hosts_parallel(self, hosts: List[str], func, *args) -> Dict[str, Any]:
+        """
+        在多个主机上并行执行函数
+
+        Args:
+            hosts: 主机列表
+            func: 执行函数，签名为 func(host, *args) -> Dict
+            *args: 传递给 func 的额外参数
+
+        Returns:
+            Dict[str, Dict]: 每个主机的执行结果
+        """
+        import concurrent.futures
+
+        max_workers = self._get_max_workers(len(hosts))
+        results = {}
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {executor.submit(func, host, *args): host for host in hosts}
+            for future in concurrent.futures.as_completed(futures):
+                host = futures[future]
+                try:
+                    results[host] = future.result()
+                except Exception as e:
+                    self.logger.error(f"[{host}] 执行异常: {e}")
+                    results[host] = {"success": False, "error": str(e)}
+
+        return results
+
     def put_file(self, hosts: List[str], local_path: str, remote_path: str) -> Dict[str, bool]:
         """
-        上传文件到多个主机
+        上传文件到多个主机（支持三级分发：本机→跳转→目标节点）
 
         Args:
             hosts: 主机列表
@@ -556,7 +608,43 @@ class BaseStep(ABC):
         Returns:
             每个主机的上传结果
         """
-        return self.batch_executor.copy_file(hosts, local_path, remote_path)
+        import os
+
+        if not os.path.exists(local_path):
+            self.logger.error(f"[{self.step_id}] 本地文件不存在: {local_path}")
+            return {host: False for host in hosts}
+
+        results = {}
+        username = None
+
+        for host in hosts:
+            try:
+                # 获取节点的登录用户
+                username = self._get_login_user(host)
+                if not username:
+                    # 尝试从 jumphost.node_auth 获取
+                    if self.config and self.config.jumphost and self.config.jumphost.node_auth:
+                        username = self.config.jumphost.node_auth.username
+                    if not username:
+                        username = self._get_deploy_user(host) or "root"
+
+                success = self.ssh_manager.copy_file_to_host(
+                    local_path=local_path,
+                    remote_path=remote_path,
+                    host=host,
+                    username=username,
+                    timeout=None  # 传输不设超时，让传输自然完成
+                )
+                results[host] = success
+                if success:
+                    self.logger.info(f"[{self.step_id}] [{host}] 上传成功: {remote_path}")
+                else:
+                    self.logger.error(f"[{self.step_id}] [{host}] 上传失败: {remote_path}")
+            except Exception as e:
+                self.logger.error(f"[{self.step_id}] [{host}] 上传异常: {e}")
+                results[host] = False
+
+        return results
 
     def smart_download(self, host: str, url: str, dest: str,
                        sudo: bool = False, stall_timeout: int = 300,

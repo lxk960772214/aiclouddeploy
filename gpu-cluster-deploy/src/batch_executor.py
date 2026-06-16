@@ -476,12 +476,18 @@ class BatchExecutor:
     def _get_node_auth(self, host: str) -> Tuple[str, Optional[str], Optional[str]]:
         """获取节点认证信息
 
+        注意：当存在跳转服务器时，private_key 应返回 None，
+        让 SSHManager 使用自动探测到的跳转服务器私钥来认证内部节点。
+
         Returns:
             (username, password, private_key) 元组
         """
         username = 'ubuntu'
         password = None
         private_key = None
+
+        # 判断是否存在跳转服务器
+        has_jumphost = self.config and self.config.jumphost
 
         if self.config:
             for node in self.config.nodes:
@@ -491,14 +497,18 @@ class BatchExecutor:
                     if hasattr(node, 'password') and node.password:
                         password = node.password
                     if hasattr(node, 'private_key') and node.private_key:
-                        private_key = node.private_key
+                        # 有跳转服务器时不使用本地密钥路径，由 SSHManager 自动处理
+                        if not has_jumphost:
+                            private_key = node.private_key
                     break
 
             # 如果节点没有单独配置，尝试从jumphost.node_auth获取
             if password is None and private_key is None and self.config.jumphost and self.config.jumphost.node_auth:
                 username = self.config.jumphost.node_auth.username or username
                 password = self.config.jumphost.node_auth.password
-                private_key = self.config.jumphost.node_auth.private_key
+                # 有跳转服务器时不使用 node_auth 的本地密钥路径
+                if not has_jumphost:
+                    private_key = self.config.jumphost.node_auth.private_key
 
         return username, password, private_key
 
@@ -612,7 +622,7 @@ class BatchExecutor:
 
     def copy_file(self, hosts: List[str], local_path: str, remote_path: str,
                   sudo: bool = False) -> Dict[str, bool]:
-        """复制文件到远程主机"""
+        """复制文件到远程主机（支持三级分发：本机→跳转→目标节点）"""
         results = {}
 
         if not self.ssh_manager:
@@ -621,26 +631,28 @@ class BatchExecutor:
 
         def copy_to_host(host: str) -> Tuple[str, bool]:
             try:
-                conn = self.ssh_manager.get_connection(host)
-                if not conn:
-                    return host, False
+                # 获取节点的登录用户
+                username = "root"
+                if self.config:
+                    for node in self.config.nodes:
+                        if node.ip == host:
+                            if hasattr(node, 'username') and node.username:
+                                username = node.username
+                            break
+                    # 如果节点没有单独配置，尝试从 jumphost.node_auth 获取
+                    if self.config.jumphost and self.config.jumphost.node_auth:
+                        username = self.config.jumphost.node_auth.username or username
 
-                # 上传到临时位置
-                temp_path = f"/tmp/{os.path.basename(local_path)}"
-                if not conn.put_file(local_path, temp_path):
-                    return host, False
-
-                # 移动到目标位置（如果目标位置和临时位置不同）
-                if temp_path != remote_path:
-                    if sudo:
-                        result = conn.execute(f"sudo mv {temp_path} {remote_path}", sudo=True)
-                    else:
-                        result = conn.execute(f"mv {temp_path} {remote_path}")
-
-                    return host, result.success
-                else:
-                    # 目标位置和临时位置相同，上传即完成
-                    return host, True
+                # 使用 ssh_manager.copy_file_to_host 进行三级分发
+                # 该方法已支持：PROXY模式（Mac→跳转→节点）和 DIRECT模式（本地→节点）
+                success = self.ssh_manager.copy_file_to_host(
+                    local_path=local_path,
+                    remote_path=remote_path,
+                    host=host,
+                    username=username,
+                    timeout=None  # 传输不设超时，让传输自然完成
+                )
+                return host, success
             except Exception as e:
                 logger.error(f"复制文件到 {host} 失败: {e}")
                 return host, False

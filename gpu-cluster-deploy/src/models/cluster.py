@@ -365,6 +365,16 @@ class NodeBatchConfig:
 
 
 @dataclass
+@dataclass
+class DeploymentConfig:
+    """部署执行配置"""
+    parallel: bool = True
+    max_workers: int = 2
+    timeout: int = 300
+    retry: int = 0
+    continue_on_failure: bool = False
+
+
 class ClusterConfig:
     """集群配置"""
     name: str = "gpu-cluster"
@@ -378,6 +388,7 @@ class ClusterConfig:
     time_sync: TimeSyncConfig = field(default_factory=TimeSyncConfig)
     network: NetworkConfig = field(default_factory=NetworkConfig)
     ssh_key: Optional["SSHKeyConfig"] = None  # SSH免密登录配置
+    deployment: DeploymentConfig = field(default_factory=DeploymentConfig)
 
     @property
     def node_count(self) -> int:

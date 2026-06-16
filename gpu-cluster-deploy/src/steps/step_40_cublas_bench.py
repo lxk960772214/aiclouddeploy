@@ -5,7 +5,7 @@
 """
 
 import os
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from pathlib import Path
 from src.steps.base import BaseStep, StepResult, StepStatus
 
@@ -104,20 +104,12 @@ class CUBLASBenchmark(BaseStep):
         return False, "CUBLAS测试工具不存在"
 
     def _get_package_path(self, config_key: str, default_filename: str) -> Optional[str]:
-        """获取工具包的本地绝对路径
-
-        Args:
-            config_key: test_packages中的配置键名
-            default_filename: 默认文件名（配置中未指定时使用）
-
-        Returns:
-            本地包文件的绝对路径，如果找不到返回None
-        """
+        """获取工具包的本地绝对路径"""
         config = self._get_test_config()
         if config:
             pkg_value = getattr(config, config_key, None)
             if pkg_value:
-                return pkg_value  # 已在配置加载时解析为绝对路径
+                return pkg_value
         return os.path.join(os.getcwd(), "packages", default_filename)
 
     def _upload_cublas_tool(self, host: str) -> bool:
@@ -152,14 +144,84 @@ class CUBLASBenchmark(BaseStep):
         self.logger.info(f"[{host}] CUBLAS测试工具上传成功")
         return True
 
-    def execute(self, hosts: List[str]) -> StepResult:
-        """执行CUBLAS基准测试"""
-        results = {}
+    def _run_test_on_host(self, host: str) -> Dict[str, Any]:
+        """在单个节点运行CUBLAS测试"""
         toolkit_dir = self._get_toolkit_dir()
         result_dir = self._get_result_dir()
 
-        # 根据编译策略确定上传节点
-        upload_hosts = self._get_compile_hosts(hosts)
+        self.logger.info(f"[{host}] 开始CUBLAS基准测试...")
+
+        # 获取GPU数量
+        gpu_count_cmd = "nvidia-smi --query-gpu=count --format=csv,noheader | head -1"
+        gpu_result = self.execute_on_host(host, gpu_count_cmd)
+        if not gpu_result.get("success"):
+            return {"success": False, "error": "获取GPU数量失败"}
+
+        gpu_count = int(gpu_result.get("stdout", "0").strip())
+        self.logger.info(f"[{host}] GPU数量: {gpu_count}")
+
+        # 创建结果目录
+        self.execute_on_host(host, f"mkdir -p {result_dir}")
+
+        # 运行测试
+        test_results = []
+        for gpu_id in range(gpu_count):
+            self.logger.info(f"[{host}] 测试 GPU {gpu_id}...")
+
+            env_cmd = f"export CUDA_VISIBLE_DEVICES={gpu_id} && export PATH={self._get_cuda_home(host)}/bin:$PATH && export LD_LIBRARY_PATH={self._get_cuda_home(host)}/lib64:$LD_LIBRARY_PATH"
+
+            test_items = [
+                ("FP64", "-P=ddd -m=15360 -n=18176 -k=8192 -T=8"),
+                ("FP32", "-P=sss -m=15360 -n=18176 -k=8192 -T=500"),
+                ("TF32", "-P=sss_fast_tf32 -m=15360 -n=18176 -k=8192 -T=500"),
+                ("FP16(hhh)", "-P=hhh -m=15360 -n=18176 -k=8192 -T=1000"),
+                ("hsh", "-P=hsh -m=15360 -n=18176 -k=8192 -T=1000"),
+                ("hss", "-P=hss -m=15360 -n=18176 -k=8192 -T=1000"),
+                ("BF16", "-P=tst -m=15360 -n=18176 -k=8192 -T=1000"),
+                ("FP8", "-P=qqssq -m=15360 -n=18176 -k=8192 -T=1000"),
+            ]
+
+            gpu_perf = {"gpu_id": gpu_id}
+            for name, params in test_items:
+                test_cmd = f"{env_cmd} && {toolkit_dir}/cublasMatmulBench {params} -ta=1 -B=0 -p=0 2>/dev/null | grep -i CUDA | awk '{{print $10}}'"
+                perf_result = self.execute_on_host(host, test_cmd, timeout=120)
+                perf_value = perf_result.get("stdout", "N/A").strip()
+                gpu_perf[name] = perf_value
+
+            test_results.append(gpu_perf)
+
+        # 保存结果
+        hostname_result = self.execute_on_host(host, "hostname")
+        hostname = hostname_result.get("stdout", host).strip()
+
+        result_lines = []
+        for r in test_results:
+            line = f"GPU {r['gpu_id']} | FP64: {r.get('FP64', 'N/A')} | FP32: {r.get('FP32', 'N/A')} | TF32: {r.get('TF32', 'N/A')} | FP16(hhh): {r.get('FP16(hhh)', 'N/A')} | hsh: {r.get('hsh', 'N/A')} | hss: {r.get('hss', 'N/A')} | BF16: {r.get('BF16', 'N/A')} | FP8: {r.get('FP8', 'N/A')}"
+            result_lines.append(line)
+            self.logger.info(f"[{host}] {line}")
+
+        result_file = f"{result_dir}/cublas_{hostname}.log"
+        write_cmd = f"cat > {result_file} << 'EOF'\n" + "\n".join(result_lines) + "\nEOF"
+        self.execute_on_host(host, write_cmd)
+
+        return {"success": True, "gpu_count": gpu_count, "results": test_results}
+
+    def execute(self, hosts: List[str]) -> StepResult:
+        """执行CUBLAS基准测试"""
+        # 筛选有GPU的节点
+        gpu_hosts = self._get_gpu_hosts(hosts)
+        if not gpu_hosts:
+            return StepResult(
+                step_id=self.step_id,
+                step_name=self.step_name,
+                status=StepStatus.SKIPPED,
+                message="没有GPU节点，跳过测试"
+            )
+
+        toolkit_dir = self._get_toolkit_dir()
+
+        # 根据编译策略确定上传节点（串行上传）
+        upload_hosts = self._get_compile_hosts(gpu_hosts)
         self.logger.info(f"编译策略: {self._get_compile_strategy()}, 上传节点: {upload_hosts}")
 
         for host in upload_hosts:
@@ -167,76 +229,24 @@ class CUBLASBenchmark(BaseStep):
             tool_result = self.execute_on_host(host, check_tool_cmd)
             if "not_exists" in tool_result.get("stdout", ""):
                 if not self._upload_cublas_tool(host):
-                    results[host] = {"success": False, "error": "cublasMatmulBench工具上传失败"}
-                    continue
+                    return StepResult(
+                        step_id=self.step_id,
+                        step_name=self.step_name,
+                        status=StepStatus.FAILED,
+                        message="cublasMatmulBench工具上传失败"
+                    )
 
-        # 所有节点运行测试
-        for host in hosts:
-            self.logger.info(f"[{host}] 开始CUBLAS基准测试...")
-
-            # 获取GPU数量
-            gpu_count_cmd = "nvidia-smi --query-gpu=count --format=csv,noheader | head -1"
-            gpu_result = self.execute_on_host(host, gpu_count_cmd)
-            if not gpu_result.get("success"):
-                results[host] = {"success": False, "error": "获取GPU数量失败"}
-                continue
-
-            gpu_count = int(gpu_result.get("stdout", "0").strip())
-            self.logger.info(f"[{host}] GPU数量: {gpu_count}")
-
-            # 创建结果目录
-            self.execute_on_host(host, f"mkdir -p {result_dir}")
-
-            # 运行测试
-            test_results = []
-            for gpu_id in range(gpu_count):
-                self.logger.info(f"[{host}] 测试 GPU {gpu_id}...")
-
-                env_cmd = f"export CUDA_VISIBLE_DEVICES={gpu_id} && export PATH={self._get_cuda_home(host)}/bin:$PATH && export LD_LIBRARY_PATH={self._get_cuda_home(host)}/lib64:$LD_LIBRARY_PATH"
-
-                test_items = [
-                    ("FP64", "-P=ddd -m=15360 -n=18176 -k=8192 -T=8"),
-                    ("FP32", "-P=sss -m=15360 -n=18176 -k=8192 -T=500"),
-                    ("TF32", "-P=sss_fast_tf32 -m=15360 -n=18176 -k=8192 -T=500"),
-                    ("FP16(hhh)", "-P=hhh -m=15360 -n=18176 -k=8192 -T=1000"),
-                    ("hsh", "-P=hsh -m=15360 -n=18176 -k=8192 -T=1000"),
-                    ("hss", "-P=hss -m=15360 -n=18176 -k=8192 -T=1000"),
-                    ("BF16", "-P=tst -m=15360 -n=18176 -k=8192 -T=1000"),
-                    ("FP8", "-P=qqssq -m=15360 -n=18176 -k=8192 -T=1000"),
-                ]
-
-                gpu_perf = {"gpu_id": gpu_id}
-                for name, params in test_items:
-                    test_cmd = f"{env_cmd} && {toolkit_dir}/cublasMatmulBench {params} -ta=1 -B=0 -p=0 2>/dev/null | grep -i CUDA | awk '{{print $10}}'"
-                    perf_result = self.execute_on_host(host, test_cmd, timeout=120)
-                    perf_value = perf_result.get("stdout", "N/A").strip()
-                    gpu_perf[name] = perf_value
-
-                test_results.append(gpu_perf)
-
-            # 保存结果
-            hostname_result = self.execute_on_host(host, "hostname")
-            hostname = hostname_result.get("stdout", host).strip()
-
-            result_lines = []
-            for r in test_results:
-                line = f"GPU {r['gpu_id']} | FP64: {r.get('FP64', 'N/A')} | FP32: {r.get('FP32', 'N/A')} | TF32: {r.get('TF32', 'N/A')} | FP16(hhh): {r.get('FP16(hhh)', 'N/A')} | hsh: {r.get('hsh', 'N/A')} | hss: {r.get('hss', 'N/A')} | BF16: {r.get('BF16', 'N/A')} | FP8: {r.get('FP8', 'N/A')}"
-                result_lines.append(line)
-                self.logger.info(f"[{host}] {line}")
-
-            result_file = f"{result_dir}/cublas_{hostname}.log"
-            write_cmd = f"cat > {result_file} << 'EOF'\n" + "\n".join(result_lines) + "\nEOF"
-            self.execute_on_host(host, write_cmd)
-
-            results[host] = {"success": True, "gpu_count": gpu_count, "results": test_results}
+        # 所有GPU节点并行运行测试
+        self.logger.info("工具就绪，开始并行运行CUBLAS测试...")
+        results = self._run_on_hosts_parallel(gpu_hosts, self._run_test_on_host)
 
         success_count = sum(1 for r in results.values() if r.get("success"))
 
         return StepResult(
             step_id=self.step_id,
             step_name=self.step_name,
-            status=StepStatus.SUCCESS if success_count == len(hosts) else StepStatus.FAILED,
-            message=f"CUBLAS测试完成，成功: {success_count}/{len(hosts)}",
+            status=StepStatus.SUCCESS if success_count == len(results) else StepStatus.FAILED,
+            message=f"CUBLAS测试完成，成功: {success_count}/{len(results)}",
             host_results=results
         )
 
@@ -244,7 +254,7 @@ class CUBLASBenchmark(BaseStep):
         """验证测试结果"""
         result_dir = self._get_result_dir()
         for host in hosts:
-            check_cmd = f"test -f {result_dir}/cublas_*.log"
+            check_cmd = f"ls {result_dir}/cublas_*.log >/dev/null 2>&1"
             result = self.execute_on_host(host, check_cmd)
             if not result.get("success"):
                 return False

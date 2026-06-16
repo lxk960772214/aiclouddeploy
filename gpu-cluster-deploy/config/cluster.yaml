@@ -4,13 +4,13 @@ cluster:
 
 
 jumphost:
-  host: "10.243.128.6"
+  host: "100.125.0.204"
   port: 22
   auth:
     type: "key"
     username: "root"
     # password: "To.syhmARxhyIEiL"
-    private_key: "~/.ssh/id_rsa"
+    private_key: "/Users/liuxinke/Documents/vscode/id_ed25519"
     # node_auth:
     #   type: "key"
     #   username: "root"
@@ -21,7 +21,7 @@ node_batch:
   enabled: true
   auth_template:            # 登录用户配置
     username: "root"
-    private_key: "~/.ssh/id_rsa"  
+    private_key: "/root/.ssh/id_rsa"  
   # 方式1：使用hosts文件格式
   hosts_file: "hosts"  # 相对路径，基于config目录
 
@@ -36,7 +36,7 @@ node_batch:
 
 # 覆盖批量节点中特定节点的配置
 nodes_override:
-  - hostname: "wqd10nbh06c6"
+  - hostname: "mn-100-125-0-204"
     roles:
       - nfs_server
       - cpu_node
@@ -65,9 +65,9 @@ nodes_override:
 nfs:
   enabled: true
   action: "share"  # share: 共享(挂载) | unshare: 取消共享(卸载)
-  server: "wqd10nbh06c6"
-  export_path: "/root/para"
-  client_mount: "/root/para"
+  server: "mn-100-125-0-204"
+  export_path: "/root/liuxk"
+  client_mount: "/root/liuxk"
 
 
 time_sync:

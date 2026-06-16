@@ -5,13 +5,58 @@ SSH连接管理器 - 支持跳转服务器、连接池、密钥/密码认证
 import os
 import time
 import socket
+import tempfile
 import paramiko
 from typing import Dict, List, Optional, Tuple, Any
 from dataclasses import dataclass
 from contextlib import contextmanager
+from enum import Enum
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+class RuntimeMode(Enum):
+    """运行模式"""
+    DIRECT = "direct"    # 在跳转节点上执行（无 jumphost SSH 连接）
+    PROXY = "proxy"      # 在外部机器（如 Mac）执行（通过 jumphost 中转）
+
+
+def _load_private_key(key_path: str, password: Optional[str] = None) -> paramiko.pkey.PKey:
+    """
+    通用私钥加载函数，自动识别密钥类型（RSA、Ed25519、ECDSA、DSA）
+
+    Args:
+        key_path: 私钥文件路径（已展开 ~）
+        password: 私钥密码（可选）
+
+    Returns:
+        paramiko.pkey.PKey: 加载的密钥对象
+
+    Raises:
+        ValueError: 无法识别或加载密钥类型
+    """
+    # 按常见优先级依次尝试不同密钥类型
+    # 注意：paramiko 3.x 移除了 DSSKey，需要动态检测
+    key_classes = [
+        getattr(paramiko, 'Ed25519Key', None),
+        getattr(paramiko, 'RSAKey', None),
+        getattr(paramiko, 'ECDSAKey', None),
+        getattr(paramiko, 'DSSKey', None),
+    ]
+    key_classes = [k for k in key_classes if k is not None]
+
+    for key_class in key_classes:
+        try:
+            return key_class.from_private_key_file(key_path, password=password)
+        except paramiko.PasswordRequiredException:
+            # 需要密码但未提供，直接抛出
+            raise
+        except Exception:
+            # 该类型不匹配或加载失败，继续尝试下一个
+            continue
+
+    raise ValueError(f"无法加载私钥文件 {key_path}：不支持的密钥类型")
 
 
 @dataclass
@@ -92,7 +137,7 @@ class SSHConnection:
 
                 if self.private_key:
                     # 密钥认证
-                    key = paramiko.RSAKey.from_private_key_file(os.path.expanduser(self.private_key))
+                    key = _load_private_key(os.path.expanduser(self.private_key))
                     self.client.connect(
                         hostname=self.host,
                         port=self.port,
@@ -130,7 +175,7 @@ class SSHConnection:
                 # 直连
                 if self.private_key:
                     # 密钥认证
-                    key = paramiko.RSAKey.from_private_key_file(os.path.expanduser(self.private_key))
+                    key = _load_private_key(os.path.expanduser(self.private_key))
                     self.client.connect(
                         hostname=self.host,
                         port=self.port,
@@ -342,6 +387,8 @@ class SSHManager:
         self.jump_client: Optional[paramiko.SSHClient] = None
         self.connections: Dict[str, SSHConnection] = {}
         self._jump_connected = False
+        # 运行模式：有跳转服务器配置即为 PROXY 模式（Mac/外部机器）
+        self._runtime_mode = RuntimeMode.PROXY if jumphost_config else RuntimeMode.DIRECT
         # 保存默认认证信息（来自 jumphost 配置，用于连接内部节点）
         if jumphost_config:
             self._default_username = jumphost_config.get("username", "ubuntu")
@@ -351,6 +398,16 @@ class SSHManager:
             self._default_username = "ubuntu"
             self._default_private_key = None
             self._default_password = None
+
+    @property
+    def runtime_mode(self) -> RuntimeMode:
+        """获取当前运行模式"""
+        return self._runtime_mode
+
+    @property
+    def is_proxy_mode(self) -> bool:
+        """是否为代理模式（从 Mac/外部机器通过跳转服务器执行）"""
+        return self._runtime_mode == RuntimeMode.PROXY
 
     def connect_jumphost(self, timeout: int = 30) -> bool:
         """连接跳转服务器"""
@@ -370,7 +427,7 @@ class SSHManager:
             private_key = self.jumphost_config.get("private_key")
 
             if private_key:
-                key = paramiko.RSAKey.from_private_key_file(os.path.expanduser(private_key))
+                key = _load_private_key(os.path.expanduser(private_key))
                 self.jump_client.connect(
                     hostname=host,
                     port=port,
@@ -397,6 +454,10 @@ class SSHManager:
             if transport:
                 transport.set_keepalive(30)
             logger.info(f"跳转服务器连接成功: {username}@{host}:{port}")
+
+            # 尝试从跳转服务器探测用于连接内部节点的私钥
+            self._detect_jumphost_key_for_nodes(username)
+
             return True
 
         except Exception as e:
@@ -404,12 +465,79 @@ class SSHManager:
             self._jump_connected = False
             return False
 
+    def _detect_jumphost_key_for_nodes(self, username: str):
+        """
+        连接跳转服务器成功后，自动探测跳转服务器上的私钥文件，
+        并将其下载到本地临时目录，用于后续连接内部节点。
+
+        当通过跳转服务器连接内部节点时，内部节点的 authorized_keys
+        里放的是跳转服务器的公钥，因此需要用跳转服务器上的私钥来认证。
+
+        Args:
+            username: 跳转服务器的用户名，用于确定 .ssh 目录位置
+        """
+        try:
+            # 确定跳转服务器上的 .ssh 目录
+            if username == "root":
+                ssh_dir = "/root/.ssh"
+            else:
+                ssh_dir = f"/home/{username}/.ssh"
+
+            # 按优先级探测私钥文件
+            key_filenames = ["id_rsa", "id_ed25519", "id_ecdsa", "id_dsa"]
+            found_key_path = None
+
+            for key_name in key_filenames:
+                remote_key_path = f"{ssh_dir}/{key_name}"
+                check_cmd = f"test -f {remote_key_path} && echo 'exists'"
+                stdin, stdout, stderr = self.jump_client.exec_command(check_cmd, timeout=5)
+                output = stdout.read().decode().strip()
+                if output == "exists":
+                    found_key_path = remote_key_path
+                    logger.info(f"在跳转服务器上发现私钥: {found_key_path}")
+                    break
+
+            if not found_key_path:
+                logger.debug(f"跳转服务器上未发现可用私钥（已检查 {ssh_dir}/ 下的 {key_filenames}）")
+                return
+
+            # 下载私钥到本地临时文件
+            sftp = self.jump_client.open_sftp()
+            temp_dir = tempfile.mkdtemp(prefix="gpu_deploy_jumphost_key_")
+            local_key_path = os.path.join(temp_dir, os.path.basename(found_key_path))
+
+            # 使用 sftp.get 下载，避免 bytes/str 编码问题
+            sftp.get(found_key_path, local_key_path)
+            sftp.close()
+
+            # 设置文件权限（私钥必须是 600）
+            os.chmod(local_key_path, 0o600)
+
+            # 更新默认密钥路径，后续连接内部节点时使用
+            self._default_private_key = local_key_path
+            self._jumphost_key_temp_dir = temp_dir  # 保存临时目录以便清理
+            logger.info(f"已下载跳转服务器私钥到本地: {local_key_path}（用于连接内部节点）")
+
+        except Exception as e:
+            logger.debug(f"探测跳转服务器私钥失败（不影响跳转服务器本身连接）: {e}")
+
     def disconnect_jumphost(self):
         """断开跳转服务器连接"""
         # 先断开所有内网连接
         for conn in self.connections.values():
             conn.disconnect()
         self.connections.clear()
+
+        # 清理从跳转服务器下载的临时密钥文件
+        temp_dir = getattr(self, '_jumphost_key_temp_dir', None)
+        if temp_dir and os.path.isdir(temp_dir):
+            try:
+                import shutil
+                shutil.rmtree(temp_dir)
+                logger.debug(f"已清理临时密钥目录: {temp_dir}")
+            except Exception as e:
+                logger.debug(f"清理临时密钥目录失败: {e}")
+            self._jumphost_key_temp_dir = None
 
         # 再断开跳转服务器
         if self.jump_client:
@@ -804,6 +932,17 @@ class SSHManager:
         for conn in self.connections.values():
             conn.disconnect()
         self.connections.clear()
+
+        # 清理从跳转服务器下载的临时密钥文件
+        temp_dir = getattr(self, '_jumphost_key_temp_dir', None)
+        if temp_dir and os.path.isdir(temp_dir):
+            try:
+                import shutil
+                shutil.rmtree(temp_dir)
+                logger.debug(f"已清理临时密钥目录: {temp_dir}")
+            except Exception as e:
+                logger.debug(f"清理临时密钥目录失败: {e}")
+            self._jumphost_key_temp_dir = None
 
         if self.jump_client:
             self.jump_client.close()

@@ -6,7 +6,7 @@
 """
 
 import os
-from typing import List, Optional
+from typing import Dict, List, Optional, Tuple
 from pathlib import Path
 from src.steps.base import BaseStep, StepResult, StepStatus
 
@@ -280,17 +280,39 @@ class NCCLSingleNodeTest(BaseStep):
         self.logger.info(f"[{host}] NCCL-tests编译完成")
         return True
 
+    def _get_gpu_hosts(self, hosts: List[str]) -> List[str]:
+        """筛选有GPU的节点（排除跳转服务器等无GPU节点）"""
+        gpu_hosts = []
+        for host in hosts:
+            gpu_count = self._get_gpu_count(host)
+            if gpu_count > 0:
+                gpu_hosts.append(host)
+            else:
+                self.logger.info(f"[{host}] 无GPU，跳过测试")
+        return gpu_hosts
+
     def execute(self, hosts: List[str]) -> StepResult:
         """执行NCCL单机多卡测试"""
         results = {}
         toolkit_dir = self._get_toolkit_dir()
         result_dir = self._get_result_dir()
 
-        # 根据编译策略确定编译节点
-        compile_hosts = self._get_compile_hosts(hosts)
+        # 筛选有GPU的节点
+        gpu_hosts = self._get_gpu_hosts(hosts)
+        if not gpu_hosts:
+            return StepResult(
+                step_id=self.step_id,
+                step_name=self.step_name,
+                status=StepStatus.SKIPPED,
+                message="没有GPU节点，跳过测试"
+            )
+
+        # 根据编译策略确定编译节点（从GPU节点中筛选）
+        compile_hosts = self._get_compile_hosts(gpu_hosts)
         self.logger.info(f"编译策略: {self._get_compile_strategy()}, 编译节点: {compile_hosts}")
 
-        # 1. 在指定节点编译
+        # 1. 在指定节点编译（串行，编译需要独占资源）
+        compile_ok = True
         for host in compile_hosts:
             self.logger.info(f"[{host}] 开始编译NCCL和NCCL-tests...")
 
@@ -298,6 +320,7 @@ class NCCLSingleNodeTest(BaseStep):
             compute_cap = self._get_compute_cap(host)
             if not compute_cap:
                 results[host] = {"success": False, "error": "无法获取GPU计算能力"}
+                compile_ok = False
                 continue
 
             self.logger.info(f"[{host}] 计算能力: {compute_cap}")
@@ -309,6 +332,7 @@ class NCCLSingleNodeTest(BaseStep):
             if "not_exists" in nccl_result.get("stdout", ""):
                 if not self._build_nccl_local(host, compute_cap):
                     results[host] = {"success": False, "error": "NCCL编译失败"}
+                    compile_ok = False
                     continue
 
             check_tests_cmd = f"test -f {toolkit_dir}/nccl-tests-master/build/all_reduce_perf && echo 'exists' || echo 'not_exists'"
@@ -317,21 +341,31 @@ class NCCLSingleNodeTest(BaseStep):
             if "not_exists" in tests_result.get("stdout", ""):
                 if not self._build_nccl_tests_local(host):
                     results[host] = {"success": False, "error": "NCCL-tests编译失败"}
+                    compile_ok = False
                     continue
 
             results[host] = {"success": True, "compiled": True}
 
-        # 2. 所有节点运行测试
-        self.logger.info("编译完成，开始运行测试...")
+        if not compile_ok:
+            return StepResult(
+                step_id=self.step_id,
+                step_name=self.step_name,
+                status=StepStatus.FAILED,
+                message="编译失败",
+                host_results=results
+            )
 
-        for host in hosts:
-            # 获取GPU数量
+        # 2. 所有GPU节点并行运行测试
+        self.logger.info("编译完成，开始并行运行测试...")
+
+        import concurrent.futures
+
+        def run_test_on_host(host: str) -> Tuple[str, Dict]:
+            """在单个节点运行NCCL测试"""
             gpu_count = self._get_gpu_count(host)
 
-            if gpu_count < 2:
-                self.logger.warning(f"[{host}] GPU数量不足({gpu_count})，跳过测试")
-                results[host] = {"success": True, "skipped": True, "reason": "GPU数量不足"}
-                continue
+            if gpu_count < 1:
+                return host, {"success": True, "skipped": True, "reason": "GPU数量不足"}
 
             self.logger.info(f"[{host}] GPU数量: {gpu_count}, 开始运行NCCL测试...")
 
@@ -346,7 +380,7 @@ class NCCLSingleNodeTest(BaseStep):
             cuda_home = self._get_cuda_home(host)
             env_cmd = f"export LD_LIBRARY_PATH={toolkit_dir}/nccl/lib:{cuda_home}/lib64:$LD_LIBRARY_PATH"
 
-            # 确定测试数据大小：如果用户未在配置中显式指定（使用默认值8G），则根据GPU算力自动调整
+            # 确定测试数据大小
             test_total = self._get_nccl_test_size()
             compute_cap = self._get_compute_cap(host)
             test_config = self._get_test_config()
@@ -370,15 +404,26 @@ class NCCLSingleNodeTest(BaseStep):
                     self.logger.error(f"[{host}] {test_item} 测试失败")
                     test_results[test_item] = {"success": False}
 
-            results[host] = {"success": True, "gpu_count": gpu_count, "tests": test_results}
+            return host, {"success": all(r.get("success") for r in test_results.values()),
+                          "gpu_count": gpu_count, "tests": test_results}
+
+        # 并行运行测试
+        max_workers = getattr(self.config, 'deployment', None)
+        max_workers = max_workers.max_workers if max_workers else 2
+        max_workers = min(len(gpu_hosts), max_workers)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {executor.submit(run_test_on_host, host): host for host in gpu_hosts}
+            for future in concurrent.futures.as_completed(futures):
+                host, result = future.result()
+                results[host] = result
 
         success_count = sum(1 for r in results.values() if r.get("success"))
 
         return StepResult(
             step_id=self.step_id,
             step_name=self.step_name,
-            status=StepStatus.SUCCESS if success_count == len(hosts) else StepStatus.FAILED,
-            message=f"NCCL单机多卡测试完成，成功: {success_count}/{len(hosts)}",
+            status=StepStatus.SUCCESS if success_count == len(results) else StepStatus.FAILED,
+            message=f"NCCL单机多卡测试完成，成功: {success_count}/{len(results)}",
             host_results=results
         )
 
@@ -386,7 +431,8 @@ class NCCLSingleNodeTest(BaseStep):
         """验证测试结果"""
         result_dir = self._get_result_dir()
         for host in hosts:
-            check_cmd = f"test -f {result_dir}/all_reduce_perf_*.log"
+            # 用 ls + grep 而非 test -f，避免通配符展开 too many arguments
+            check_cmd = f"ls {result_dir}/all_reduce_perf_*.log >/dev/null 2>&1"
             result = self.execute_on_host(host, check_cmd)
             if not result.get("success"):
                 return False

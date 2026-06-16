@@ -5,7 +5,7 @@
 """
 
 import os
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from src.steps.base import BaseStep, StepResult, StepStatus
 
 
@@ -75,6 +75,31 @@ class GPUBurnTest(BaseStep):
         if result.get("success"):
             return int(result.get("stdout", "0").strip())
         return 0
+
+    def _get_compile_hosts(self, hosts: List[str]) -> List[str]:
+        """根据编译策略确定编译节点"""
+        compile_strategy = "single_node"
+        compile_role = "test_compile"
+        if hasattr(self, 'versions') and self.versions and hasattr(self.versions, 'test_packages'):
+            compile_strategy = self.versions.test_packages.compile_strategy
+            compile_role = self.versions.test_packages.compile_role
+
+        if compile_strategy == "local":
+            return hosts
+        elif compile_strategy == "single_node":
+            return [hosts[0]] if hosts else []
+        elif compile_strategy == "role_based":
+            compile_hosts = []
+            for host in hosts:
+                node = self._get_node_config(host)
+                if node and hasattr(node, 'roles') and compile_role in node.roles:
+                    compile_hosts.append(host)
+            if not compile_hosts and hosts:
+                self.logger.warning(f"没有节点具有 '{compile_role}' 角色，使用第一个节点编译")
+                compile_hosts = [hosts[0]]
+            return compile_hosts
+        else:
+            return [hosts[0]] if hosts else []
 
     def _upload_and_build_gpuburn(self, host: str, compute_cap: int, cuda_version: str) -> bool:
         """上传并编译GPU Burn"""
@@ -158,85 +183,116 @@ class GPUBurnTest(BaseStep):
         return False, "GPU Burn工具未编译"
 
     def _get_package_path(self, config_key: str, default_filename: str) -> Optional[str]:
-        """获取工具包的本地绝对路径
-
-        Args:
-            config_key: test_packages中的配置键名
-            default_filename: 默认文件名（配置中未指定时使用）
-
-        Returns:
-            本地包文件的绝对路径，如果找不到返回None
-        """
+        """获取工具包的本地绝对路径"""
         if hasattr(self, 'versions') and self.versions and hasattr(self.versions, 'test_packages'):
             config = self.versions.test_packages
             pkg_value = getattr(config, config_key, None)
             if pkg_value:
-                return pkg_value  # 已在配置加载时解析为绝对路径
+                return pkg_value
         return os.path.join(os.getcwd(), "packages", default_filename)
 
-    def execute(self, hosts: List[str]) -> StepResult:
-        """执行GPU Burn测试"""
-        results = {}
+    def _run_test_on_host(self, host: str) -> Dict[str, Any]:
+        """在单个节点运行GPU Burn测试"""
         toolkit_dir = self._get_toolkit_dir()
         result_dir = self._get_result_dir()
         duration = self._get_gpuburn_duration()
 
-        for host in hosts:
-            self.logger.info(f"[{host}] 开始GPU Burn测试...")
+        self.logger.info(f"[{host}] 开始GPU Burn测试...")
 
-            # 1. 获取GPU信息
+        # 1. 获取GPU信息
+        compute_cap = self._get_compute_cap(host)
+        cuda_version = self._get_cuda_version(host)
+        gpu_count = self._get_gpu_count(host)
+
+        if not compute_cap or not cuda_version:
+            return {"success": False, "error": "无法获取GPU/CUDA信息"}
+
+        if gpu_count < 1:
+            return {"success": False, "error": "未检测到GPU"}
+
+        self.logger.info(f"[{host}] GPU: {gpu_count}, 计算能力: {compute_cap}, CUDA: {cuda_version}")
+
+        # 2. 检查并编译GPU Burn（如果需要）
+        check_cmd = f"test -f {toolkit_dir}/gpu-burn-master/gpu_burn && echo 'exists' || echo 'not_exists'"
+        check_result = self.execute_on_host(host, check_cmd)
+
+        if "not_exists" in check_result.get("stdout", ""):
+            if not self._upload_and_build_gpuburn(host, compute_cap, cuda_version):
+                return {"success": False, "error": "GPU Burn编译失败"}
+
+        # 3. 运行测试
+        self.execute_on_host(host, f"mkdir -p {result_dir}")
+
+        hostname_cmd = "hostname"
+        hostname_result = self.execute_on_host(host, hostname_cmd)
+        hostname = hostname_result.get("stdout", host).strip()
+
+        self.logger.info(f"[{host}] 运行GPU Burn测试 (时长: {duration}秒)...")
+        test_cmd = f"cd {toolkit_dir}/gpu-burn-master && ./gpu_burn -tc {duration} > {result_dir}/gpuburn_{hostname}.log 2>&1"
+        test_result = self.execute_on_host(host, test_cmd, timeout=duration + 300)
+
+        if test_result.get("success"):
+            # 读取结果摘要
+            read_cmd = f"tail -20 {result_dir}/gpuburn_{hostname}.log"
+            summary_result = self.execute_on_host(host, read_cmd)
+            summary = summary_result.get("stdout", "")
+            self.logger.info(f"[{host}] GPU Burn测试完成")
+            return {"success": True, "duration": duration, "summary": summary}
+        else:
+            self.logger.error(f"[{host}] GPU Burn测试失败")
+            return {"success": False, "error": "GPU Burn测试失败"}
+
+    def execute(self, hosts: List[str]) -> StepResult:
+        """执行GPU Burn测试"""
+        # 筛选有GPU的节点
+        gpu_hosts = self._get_gpu_hosts(hosts)
+        if not gpu_hosts:
+            return StepResult(
+                step_id=self.step_id,
+                step_name=self.step_name,
+                status=StepStatus.SKIPPED,
+                message="没有GPU节点，跳过测试"
+            )
+
+        # 先在编译节点编译（串行，编译需要独占资源）
+        compile_hosts = self._get_compile_hosts(gpu_hosts)
+        self.logger.info(f"编译节点: {compile_hosts}")
+
+        compile_ok = True
+        for host in compile_hosts:
             compute_cap = self._get_compute_cap(host)
             cuda_version = self._get_cuda_version(host)
-            gpu_count = self._get_gpu_count(host)
-
             if not compute_cap or not cuda_version:
-                results[host] = {"success": False, "error": "无法获取GPU/CUDA信息"}
+                self.logger.error(f"[{host}] 无法获取GPU/CUDA信息")
+                compile_ok = False
                 continue
 
-            if gpu_count < 1:
-                results[host] = {"success": False, "error": "未检测到GPU"}
-                continue
-
-            self.logger.info(f"[{host}] GPU: {gpu_count}, 计算能力: {compute_cap}, CUDA: {cuda_version}")
-
-            # 2. 检查并编译GPU Burn（如果需要）
-            check_cmd = f"test -f {toolkit_dir}/gpu-burn-master/gpu_burn && echo 'exists' || echo 'not_exists'"
+            check_cmd = f"test -f {self._get_toolkit_dir()}/gpu-burn-master/gpu_burn && echo 'exists' || echo 'not_exists'"
             check_result = self.execute_on_host(host, check_cmd)
-
             if "not_exists" in check_result.get("stdout", ""):
                 if not self._upload_and_build_gpuburn(host, compute_cap, cuda_version):
-                    results[host] = {"success": False, "error": "GPU Burn编译失败"}
+                    compile_ok = False
                     continue
 
-            # 3. 运行测试
-            self.execute_on_host(host, f"mkdir -p {result_dir}")
+        if not compile_ok:
+            return StepResult(
+                step_id=self.step_id,
+                step_name=self.step_name,
+                status=StepStatus.FAILED,
+                message="GPU Burn编译失败"
+            )
 
-            hostname_cmd = "hostname"
-            hostname_result = self.execute_on_host(host, hostname_cmd)
-            hostname = hostname_result.get("stdout", host).strip()
-
-            self.logger.info(f"[{host}] 运行GPU Burn测试 (时长: {duration}秒)...")
-            test_cmd = f"cd {toolkit_dir}/gpu-burn-master && ./gpu_burn -tc {duration} > {result_dir}/gpuburn_{hostname}.log 2>&1"
-            test_result = self.execute_on_host(host, test_cmd, timeout=duration + 300)
-
-            if test_result.get("success"):
-                # 读取结果摘要
-                read_cmd = f"tail -20 {result_dir}/gpuburn_{hostname}.log"
-                summary_result = self.execute_on_host(host, read_cmd)
-                summary = summary_result.get("stdout", "")
-                self.logger.info(f"[{host}] GPU Burn测试完成")
-                results[host] = {"success": True, "duration": duration, "summary": summary}
-            else:
-                self.logger.error(f"[{host}] GPU Burn测试失败")
-                results[host] = {"success": False, "error": "GPU Burn测试失败"}
+        # 所有GPU节点并行运行测试
+        self.logger.info("编译完成，开始并行运行GPU Burn测试...")
+        results = self._run_on_hosts_parallel(gpu_hosts, self._run_test_on_host)
 
         success_count = sum(1 for r in results.values() if r.get("success"))
 
         return StepResult(
             step_id=self.step_id,
             step_name=self.step_name,
-            status=StepStatus.SUCCESS if success_count == len(hosts) else StepStatus.FAILED,
-            message=f"GPU Burn测试完成，成功: {success_count}/{len(hosts)}",
+            status=StepStatus.SUCCESS if success_count == len(results) else StepStatus.FAILED,
+            message=f"GPU Burn测试完成，成功: {success_count}/{len(results)}",
             host_results=results
         )
 
@@ -244,7 +300,7 @@ class GPUBurnTest(BaseStep):
         """验证测试结果"""
         result_dir = self._get_result_dir()
         for host in hosts:
-            check_cmd = f"test -f {result_dir}/gpuburn_*.log"
+            check_cmd = f"ls {result_dir}/gpuburn_*.log >/dev/null 2>&1"
             result = self.execute_on_host(host, check_cmd)
             if not result.get("success"):
                 return False
