@@ -64,7 +64,7 @@ nodes_override:
 
 nfs:
   enabled: true
-  action: "share"  # share: 共享(挂载) | unshare: 取消共享(卸载)
+  action: "unshare"  # share: 共享(挂载) | unshare: 取消共享(卸载)
   server: "mn-100-125-0-204"
   export_path: "/root/liuxk"
   client_mount: "/root/liuxk"

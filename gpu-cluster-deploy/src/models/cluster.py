@@ -365,7 +365,6 @@ class NodeBatchConfig:
 
 
 @dataclass
-@dataclass
 class DeploymentConfig:
     """部署执行配置"""
     parallel: bool = True
@@ -375,6 +374,7 @@ class DeploymentConfig:
     continue_on_failure: bool = False
 
 
+@dataclass
 class ClusterConfig:
     """集群配置"""
     name: str = "gpu-cluster"
