@@ -82,6 +82,7 @@ gpu-cluster-deploy/
 │   │   ├── step_9_hostname_hosts.py # 主机名配置
 │   │   ├── step_10_create_user.py   # 用户创建
 │   │   ├── step_0d_ssh_key.py       # SSH 免密配置
+│   │   ├── step_0e_disable_password_auth.py # 禁止 SSH 密码登录
 │   │   ├── step_12_cpu_performance.py # CPU 性能模式
 │   │   ├── step_13_file_limits.py   # 文件描述符限制
 │   │   ├── step_15_disable_autoupdate.py # 禁用自动更新
@@ -1109,7 +1110,7 @@ python src/main.py export --format json --output plan.json
 
 | 分组 | 步骤范围 | 描述 |
 |------|----------|------|
-| 0 | 00-0c | 预检查（设备一致性、网络连通性、RDMA 测试） |
+| 0 | 00-0e | 预检查（设备一致性、网络连通性、RDMA 测试、SSH 安全配置） |
 | A | 01-04 | 系统检查（依赖、内核、glibc、OpenSSH） |
 | B | 05-09 | 基础配置（sudo、磁盘、MSR、rc.local、主机名） |
 | C | 10-13 | 用户与 SSH（用户创建、密钥、CPU 性能、文件限制） |
@@ -1127,6 +1128,7 @@ python src/main.py export --format json --output plan.json
 | 0b | 网络连通性检查 | 检查 IP/DNS/HTTP 连通性（使用登录用户） | 否 | 否 |
 | 0c | RDMA 网络测试 | 三轮测试定位异常网络设备（含 RoCE Ping 测试） | 否 | 否 |
 | 0d | SSH 免密配置 | 配置 SSH 免密登录（使用登录用户） | 是 | 否 |
+| 0e | 禁止 SSH 密码登录 | 禁止 SSH 密码登录，增强安全性 | 是 | 否 |
 | 01 | 依赖安装 | 安装基础依赖包 | 是 | 否 |
 | 02 | 内核检查 | 检查内核版本兼容性 | 是 | 可能 |
 | 03 | glibc 检查 | 检查 glibc 版本 | 否 | 否 |
@@ -1481,11 +1483,9 @@ pytest tests/test_ssh_manager.py::TestSSHManager::test_connect -v
 
 ## 待开发或验证
 
-1. time server 验证
-2. node_batch 验证
-3、把nccl部分移入test_packages里面。
-4、packages_dir: "packages"  # 相对于项目根目录，或绝对路径 很好用，添加
-本地编译目录 共享工具目录（可NFS）测试结果目录 编译日志目录 也可以便捷的使用相对目录，比如gpu-cluster-deploy下面的test_run目录
+1、nfs unshare失败，有bug。nfs挂载和取消挂载添加验证
+2、配置完项目添加随即验证
+
 
 ## 许可证
 

@@ -22,8 +22,7 @@ class NCCLSingleNodeTest(BaseStep):
     timeout = 1800  # 30分钟（包含编译时间）
 
     # 测试项目
-    # TEST_ITEMS = ['all_reduce_perf', 'all_gather_perf', 'alltoall_perf']
-    TEST_ITEMS = ['all_reduce_perf']
+    TEST_ITEMS = ['all_reduce_perf', 'all_gather_perf', 'alltoall_perf']
 
     def _get_test_config(self):
         """获取测试配置"""

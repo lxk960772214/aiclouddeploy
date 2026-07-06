@@ -17,6 +17,8 @@ gpu-cluster-deploy/logs/
 *.log
 *.jsonl
 logs/
+reports/
+
 
 # IDE
 .idea/
@@ -34,3 +36,4 @@ conf-git/
 gpu-cluster-deploy.zip
 gpu-cluster-deploy.tar
 info.txt
+cluster-*.yaml

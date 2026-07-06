@@ -42,6 +42,7 @@ STEP_METADATA = {
     # Group C: User and SSH
     "step_10": {"category": StepCategory.SECURITY, "tags": ["user", "account"]},
     "step_0d": {"category": StepCategory.SECURITY, "tags": ["ssh", "keys", "auth"]},
+    "step_0e": {"category": StepCategory.SECURITY, "tags": ["ssh", "password", "auth", "security"]},
     "step_12": {"category": StepCategory.SYSTEM, "tags": ["cpu", "performance"]},
     "step_13": {"category": StepCategory.SYSTEM, "tags": ["limits", "ulimit"]},
     # Group D: System optimization
@@ -109,6 +110,7 @@ from .step_9_hostname_hosts import HostnameHosts
 # Group C: 用户与SSH
 from .step_10_create_user import CreateUser
 from .step_0d_ssh_key import SSHKeySetup
+from .step_0e_disable_password_auth import DisablePasswordAuth
 from .step_12_cpu_performance import CPUPerformance
 from .step_13_file_limits import FileLimits
 
@@ -169,6 +171,7 @@ ALL_STEPS = [
     NetworkCheckStep,       # step_0b: 网络连通性检查
     # Phase 1: 初始化配置（SSH免密优先，为后续pdsh批量执行做准备）
     SSHKeySetup,            # step_0d: 配置SSH免密（使用登录用户）
+    DisablePasswordAuth,    # step_0e: 禁止SSH密码登录
     HostnameHosts,          # step_09: 配置hosts（使用部署用户免密）
     # --- SSH免密和hosts完成后切换到pdsh模式 ---
     InstallDependencies,    # step_01: 安装依赖（pdsh模式）
@@ -234,7 +237,7 @@ __all__ = [
     # Group B
     'SudoNopasswd', 'DiskMount', 'MSRSettings', 'RcLocalSetup', 'HostnameHosts',
     # Group C
-    'CreateUser', 'SSHKeySetup', 'CPUPerformance', 'FileLimits',
+    'CreateUser', 'SSHKeySetup', 'DisablePasswordAuth', 'CPUPerformance', 'FileLimits',
     # Group D
     'DisableAutoUpdate', 'LockKernel', 'TimezoneSetup', 'DisableIPv6', 'VmcoreHibernate',
     # Group E

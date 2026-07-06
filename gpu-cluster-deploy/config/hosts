@@ -1,7 +1,94 @@
-100.125.0.204 mn-100-125-0-204
-100.125.0.10 gn-100-125-0-10
-100.125.0.11 gn-100-125-0-11
-100.125.0.12 gn-100-125-0-12
-100.125.0.13 gn-100-125-0-13
-100.125.0.14 gn-100-125-0-14
-100.125.0.15 gn-100-125-0-15
+10.123.10.1	k8s-worker01-cpu
+10.123.10.2	k8s-worker02-cpu
+10.123.10.3	k8s-worker03-cpu
+# 10.123.10.4	k8s-worker04-cpu
+# 10.123.10.5	k8s-worker05-cpu
+# 10.123.10.6	k8s-worker06-cpu
+# 10.123.10.7	k8s-worker07-cpu
+# 10.123.10.8	k8s-worker08-cpu
+# 10.123.10.9	k8s-worker09-cpu
+# 10.123.10.10	k8s-worker-10-cpu
+# 10.123.10.11	k8s-worker11-cpu
+# 10.1.100.247	k8s-master01-cpu
+# 10.1.100.248	k8s-master02-cpu
+# 10.1.100.249	k8s-master03-cpu
+10.123.10.21	k8s-worker01-gpu
+10.123.10.22	k8s-worker02-gpu 
+10.123.10.23	k8s-worker03-gpu
+10.123.10.24	k8s-worker04-gpu
+10.123.10.25	k8s-worker05-gpu
+10.123.10.26	k8s-worker06-gpu
+10.123.10.27	k8s-worker07-gpu
+10.123.10.28	k8s-worker08-gpu
+10.123.10.29	k8s-worker09-gpu
+10.123.10.30	k8s-worker10-gpu
+# 10.123.10.31	k8s-worker11-gpu
+10.123.10.32	k8s-worker12-gpu
+10.123.10.33	k8s-worker13-gpu
+10.123.10.34	k8s-worker14-gpu
+10.123.10.35	k8s-worker15-gpu
+10.123.10.36	k8s-worker16-gpu
+10.123.10.37	k8s-worker17-gpu
+10.123.10.38	k8s-worker18-gpu
+10.123.10.39	k8s-worker19-gpu
+10.123.10.40	k8s-worker20-gpu
+10.123.10.41	k8s-worker21-gpu
+10.123.10.42	k8s-worker22-gpu
+10.123.10.43	k8s-worker23-gpu
+10.123.10.44	k8s-worker24-gpu
+10.123.10.45	k8s-worker25-gpu
+10.123.10.46	k8s-worker26-gpu
+10.123.10.47	k8s-worker27-gpu
+10.123.10.48	k8s-worker28-gpu
+10.123.10.49	k8s-worker29-gpu
+10.123.10.50	k8s-worker30-gpu
+10.123.10.51	k8s-worker31-gpu
+10.123.10.52	k8s-worker32-gpu
+10.123.10.53	k8s-worker33-gpu
+10.123.10.54	k8s-worker34-gpu
+10.123.10.55	k8s-worker35-gpu
+10.123.10.56	k8s-worker36-gpu
+10.123.10.57	k8s-worker37-gpu
+10.123.10.58	k8s-worker38-gpu
+10.123.10.59	k8s-worker39-gpu
+10.123.10.60	k8s-worker40-gpu
+10.123.10.61	k8s-worker41-gpu
+10.123.10.62	k8s-worker42-gpu
+10.123.10.63	k8s-worker43-gpu
+10.123.10.64	k8s-worker44-gpu
+10.123.10.65	k8s-worker45-gpu
+10.123.10.66	k8s-worker46-gpu
+10.123.10.67	k8s-worker47-gpu
+10.123.10.68	k8s-worker48-gpu
+10.123.10.69	k8s-worker49-gpu
+10.123.10.70	k8s-worker50-gpu
+10.123.10.71	k8s-worker51-gpu
+10.123.10.72	k8s-worker52-gpu
+10.123.10.73	k8s-worker53-gpu
+10.123.10.74	k8s-worker54-gpu
+10.123.10.75	k8s-worker55-gpu
+10.123.10.76	k8s-worker56-gpu
+10.123.10.77	k8s-worker57-gpu
+10.123.10.78	k8s-worker58-gpu
+10.123.10.79	k8s-worker59-gpu
+10.123.10.80	k8s-worker60-gpu
+10.123.10.81	k8s-worker61-gpu
+10.123.10.82	k8s-worker62-gpu
+10.123.10.83	k8s-worker63-gpu
+10.123.10.84	k8s-worker64-gpu
+10.123.10.85	k8s-worker65-gpu
+10.123.10.86	k8s-worker66-gpu
+10.123.10.87	k8s-worker67-gpu
+10.123.10.88	k8s-worker68-gpu
+10.123.10.89	k8s-worker69-gpu
+10.123.10.90	k8s-worker70-gpu
+10.123.10.91	k8s-worker71-gpu
+10.123.10.92	k8s-worker72-gpu
+10.123.10.93	k8s-worker73-gpu
+10.123.10.94	k8s-worker74-gpu
+10.123.10.95	k8s-worker75-gpu
+10.123.10.96	k8s-worker76-gpu
+10.123.10.97	k8s-worker77-gpu
+10.123.10.98	k8s-worker78-gpu
+10.123.10.99	k8s-worker79-gpu
+10.123.10.100	k8s-worker80-gpu
