@@ -216,7 +216,7 @@ class SSHConnection:
             return True
 
         except Exception as e:
-            logger.error(f"SSH连接失败: {self.host} - {e}")
+            logger.error(f"SSH连接失败: {self.username}@{self.host} - {e}")
             self._connected = False
             return False
 
@@ -569,7 +569,9 @@ class SSHManager:
             username = self._default_username
         if password is None:
             password = self._default_password
-        if private_key is None:
+        # 仅当调用方未显式提供密码时，才使用默认私钥
+        # 如果显式提供了密码，说明要用密码认证，不应被默认私钥覆盖
+        if private_key is None and password is None:
             private_key = self._default_private_key
 
         conn_key = f"{username}@{host}:{port}"
@@ -633,7 +635,9 @@ class SSHManager:
             username = self._default_username
         if password is None:
             password = self._default_password
-        if private_key is None:
+        # 仅当调用方未显式提供密码时，才使用默认私钥
+        # 如果显式提供了密码，说明要用密码认证，不应被默认私钥覆盖
+        if private_key is None and password is None:
             private_key = self._default_private_key
 
         conn = self.get_connection(
@@ -674,7 +678,9 @@ class SSHManager:
             username = self._default_username
         if password is None:
             password = self._default_password
-        if private_key is None:
+        # 仅当调用方未显式提供密码时，才使用默认私钥
+        # 如果显式提供了密码，说明要用密码认证，不应被默认私钥覆盖
+        if private_key is None and password is None:
             private_key = self._default_private_key
 
         import concurrent.futures

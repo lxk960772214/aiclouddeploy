@@ -18,20 +18,61 @@ class LockKernel(BaseStep):
 
     def execute(self, hosts: List[str]) -> StepResult:
         """执行内核版本固定"""
+        # 检查内核配置
+        kernel_config = self.versions.kernel if hasattr(self, 'versions') and self.versions else None
+
+        if not kernel_config:
+            return StepResult(
+                step_id=self.step_id,
+                step_name=self.step_name,
+                status=StepStatus.SKIPPED,
+                message="未配置版本信息，跳过内核固定"
+            )
+
+        mode = getattr(kernel_config, 'mode', 'keep')
+
+        if mode == "keep":
+            # mode=keep 时，检查 keep.lock_version 是否为 True
+            keep_config = getattr(kernel_config, 'keep', None)
+            lock_version = getattr(keep_config, 'lock_version', False) if keep_config else False
+
+            if not lock_version:
+                return StepResult(
+                    step_id=self.step_id,
+                    step_name=self.step_name,
+                    status=StepStatus.SKIPPED,
+                    message="内核模式为keep且lock_version为false，跳过内核固定"
+                )
+
+            # lock_version=True，需要执行锁定
+            self.logger.info("内核模式为keep + lock_version=true，执行内核版本锁定")
+
+        # 检查是否需要 update-grub
+        should_update_grub = True
+        if mode == "keep":
+            keep_config = getattr(kernel_config, 'keep', None)
+            should_update_grub = getattr(keep_config, 'update_grub', True) if keep_config else True
+
         # 使用POSIX兼容语法，修复[[ ]]在sh中不可用的问题
         # 直接修改GRUB_DEFAULT行，不依赖行号
-        cmd = '''
+        update_grub_cmd = "update-grub 2>/dev/null" if should_update_grub else "echo 'skip_update_grub'"
+        cmd = f'''
 kernel_version=$(uname -r)
 grub_config="/etc/default/grub"
 new_default="Advanced options for Ubuntu>Ubuntu, with Linux $kernel_version"
 
 if grep -q "^GRUB_DEFAULT=" "$grub_config"; then
-    sed -i "s|^GRUB_DEFAULT=.*|GRUB_DEFAULT=\"$new_default\"|" "$grub_config"
-    if update-grub 2>/dev/null; then
-        echo "内核版本已固定: $kernel_version"
+    current_default=$(grep "^GRUB_DEFAULT=" "$grub_config" | cut -d= -f2- | tr -d '"')
+    if [ "$current_default" = "$new_default" ]; then
+        echo "内核版本已固定(无需修改): $kernel_version"
     else
-        echo "update-grub执行失败"
-        exit 1
+        sed -i "s|^GRUB_DEFAULT=.*|GRUB_DEFAULT=\\"$new_default\\"|" "$grub_config"
+        if {update_grub_cmd}; then
+            echo "内核版本已固定: $kernel_version"
+        else
+            echo "update-grub执行失败"
+            exit 1
+        fi
     fi
 else
     echo "未找到GRUB_DEFAULT配置"
@@ -44,7 +85,7 @@ fi
         failed_hosts = []
 
         for host, res in result.results.items():
-            if res.success and "内核版本已固定" in res.stdout:
+            if res.success and ("内核版本已固定" in res.stdout):
                 success_hosts.append(host)
             else:
                 failed_hosts.append(host)
@@ -78,9 +119,21 @@ fi
         """
         kernel_config = self.versions.kernel if hasattr(self, 'versions') and self.versions else None
 
-        # 如果kernel.mode == "keep"，表示不锁定，直接返回True跳过
-        if kernel_config and getattr(kernel_config, 'mode', 'keep') == "keep":
-            return True, "内核模式为keep，无需固定"
+        if not kernel_config:
+            return True, "未配置版本信息，跳过"
+
+        mode = getattr(kernel_config, 'mode', 'keep')
+
+        if mode == "keep":
+            # mode=keep 时，检查 keep.lock_version
+            keep_config = getattr(kernel_config, 'keep', None)
+            lock_version = getattr(keep_config, 'lock_version', False) if keep_config else False
+
+            if not lock_version:
+                return True, "内核模式为keep且lock_version为false，无需固定"
+
+            # lock_version=True，需要验证GRUB配置
+            # 继续往下检查GRUB配置
 
         # 检查GRUB_DEFAULT是否设置了Advanced options
         result = self.execute_on_host(host, "grep 'GRUB_DEFAULT=' /etc/default/grub 2>/dev/null", sudo=False)
@@ -105,14 +158,22 @@ fi
 
     def post_check(self, hosts: List[str]) -> bool:
         """验证GRUB配置"""
+        kernel_config = self.versions.kernel if hasattr(self, 'versions') and self.versions else None
+
+        if not kernel_config:
+            return True
+
+        mode = getattr(kernel_config, 'mode', 'keep')
+
+        if mode == "keep":
+            keep_config = getattr(kernel_config, 'keep', None)
+            lock_version = getattr(keep_config, 'lock_version', False) if keep_config else False
+            if not lock_version:
+                return True
+
         # 检查GRUB_DEFAULT是否包含Advanced options
         cmd = "grep 'GRUB_DEFAULT=' /etc/default/grub | grep 'Advanced options'"
         result = self.execute_batch(hosts, cmd, sudo=False)
-
-        # 如果kernel.mode == "keep"，则post_check返回True
-        kernel_config = self.versions.kernel if hasattr(self, 'versions') and self.versions else None
-        if kernel_config and getattr(kernel_config, 'mode', 'keep') == "keep":
-            return True
 
         # 否则检查是否配置了内核锁定
         success_count = sum(1 for r in result.results.values() if r.success)

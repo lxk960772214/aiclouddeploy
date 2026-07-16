@@ -1482,10 +1482,29 @@ pytest tests/test_ssh_manager.py::TestSSHManager::test_connect -v
 6. **向后兼容** - 新功能保持向后兼容，旧配置文件无需修改
 
 ## 待开发或验证
+1、配置完项目添加随即验证
+
 
 1、nfs unshare失败，有bug。nfs挂载和取消挂载添加验证
-2、配置完项目添加随即验证
+2、rc-local 会不会误覆盖原有的配置，是不是少了systemctl restart rc-local.service
+3、/etc/hosts 没有追加跳转节点的IP和节点信息，是否有哪个步骤是配置/etc/hosts ip节点名绑定的
+4、16固定内核版本好像没成功
+5、检查配置nfs是否会导致nfs server /etc/exports 配置丢失
+6、将修改 /Users/liuxinke/Nutstore Files/work/裸金属/aiclouddeploy/gpu-cluster-deploy/ARCHITECTURE.md 的原则写入文件。主要作用为1、记录代码结构，帮助AI对代码有整体的了解；2、方便修改代码和添加删除功能；3、不要记录为流水账，要求是整体概述和牵连关键点标记。
+7、step_10_create_user ubuntu的信息默认是uid=1000(ubuntu) gid=1000(ubuntu) groups=1000(ubuntu)，更新一下
+【完成】
 
+1、
+问题4: 步骤16内核固定不生效 — step_16_lock_kernel.py
+is_configured() 不再在 mode=keep 时直接返回 True，而是检查 keep.lock_version
+execute() 增加 mode=keep + lock_version 的判断逻辑
+支持 keep.update_grub 配置控制是否执行 update-grub
+添加了GRUB配置已正确的检测（避免重复修改）
+没读懂，需要验证
+2、openssh低于要求版本，升级后执行完step4提示部署失败退出配置了
+3、节点命名之前有在/etc/hosts里面记录，step9没有删除改名前的记录，导致后检查失败了。修复一下问题。
+4、nvidia-fabricmanager安装遇到网络问题，驱动卸载失败，见/Users/liuxinke/Nutstore Files/work/裸金属/aiclouddeploy/info.txt
+5、配置多个nfs挂载目录
 
 ## 许可证
 
@@ -1500,3 +1519,6 @@ MIT License
 3. 提交更改 (`git commit -m 'Add amazing feature'`)
 4. 推送到分支 (`git push origin feature/amazing-feature`)
 5. 创建 Pull Request
+
+
+

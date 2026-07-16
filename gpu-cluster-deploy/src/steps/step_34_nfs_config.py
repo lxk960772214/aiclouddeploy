@@ -153,31 +153,32 @@ class NFSConfig(BaseStep):
         self.execute_on_host(server_ip, install_server_cmd, sudo=True)
 
         # 创建导出目录
-        # mkdir_cmd = f"mkdir -p {export_path} && chmod -R a+rwX {export_path}"
         mkdir_cmd = f"mkdir -p {export_path}"
         self.execute_on_host(server_ip, mkdir_cmd, sudo=True)
 
-        # 配置exports（每个客户端IP一行，避免格式问题）
-        # 先清理已有的该 export_path 条目
-        check_exports_cmd = f"grep -q '{export_path}' /etc/exports 2>/dev/null && echo 'exists' || echo 'not_exists'"
-        check_result = self.execute_on_host(server_ip, check_exports_cmd, sudo=True)
+        # 备份 /etc/exports
+        backup_cmd = f"test -f /etc/exports.bak || cp /etc/exports /etc/exports.bak"
+        self.execute_on_host(server_ip, backup_cmd, sudo=True)
 
-        if check_result.get("stdout", "").strip() == "exists":
-            # 先移除旧条目再添加新条目，避免重复
-            self.logger.info(f"[{server_ip}] exports条目已存在，先清理再重新添加")
-            sed_cmd = f"sed -i '\\|{export_path}|d' /etc/exports"
-            self.execute_on_host(server_ip, sed_cmd, sudo=True)
-
-        # 每个客户端IP一行
+        # 配置exports — 只追加缺失的条目，不删除已有条目（避免丢失其他NFS配置）
         for client_ip in client_ips:
-            exports_entry = f"{export_path} {client_ip}(rw,sync,no_subtree_check,no_root_squash)"
-            exports_cmd = f'echo "{exports_entry}" >> /etc/exports'
-            self.execute_on_host(server_ip, exports_cmd, sudo=True)
+            # 检查该客户端IP的条目是否已存在
+            check_entry = f"grep -q '{export_path}.*{client_ip}' /etc/exports 2>/dev/null && echo 'exists' || echo 'not_exists'"
+            check_result = self.execute_on_host(server_ip, check_entry, sudo=True)
+
+            if check_result.get("stdout", "").strip() != "exists":
+                # 条目不存在，追加
+                exports_entry = f"{export_path} {client_ip}(rw,sync,no_subtree_check,no_root_squash)"
+                exports_cmd = f'echo "{exports_entry}" >> /etc/exports'
+                self.execute_on_host(server_ip, exports_cmd, sudo=True)
+                self.logger.info(f"[{server_ip}] 添加exports条目: {client_ip}")
+            else:
+                self.logger.info(f"[{server_ip}] exports条目已存在: {client_ip}，跳过")
 
         # 重启NFS服务
         restart_nfs_cmd = "systemctl restart nfs-server && systemctl enable nfs-server && exportfs -arv"
         server_result = self.execute_on_host(server_ip, restart_nfs_cmd, sudo=True)
-        results[server_ip] = {"server": server_result}
+        results[server_ip] = {"success": server_result.get("success", False), "server": server_result}
 
         # 2. 配置NFS客户端
         for host in hosts:
@@ -201,23 +202,45 @@ class NFSConfig(BaseStep):
             mkdir_cmd = f"mkdir -p {client_mount}"
             self.execute_on_host(host, mkdir_cmd, sudo=True)
 
+            # 检查是否已挂载
+            check_mount_cmd = f"mountpoint -q {client_mount} && echo 'mounted' || echo 'not_mounted'"
+            check_result = self.execute_on_host(host, check_mount_cmd, sudo=True)
+
+            if check_result.get("stdout", "").strip() == "mounted":
+                self.logger.info(f"[{host}] NFS已挂载，跳过挂载操作")
+                results[host] = {"success": True, "message": "NFS已挂载"}
+                continue
+
             # 挂载NFS（使用服务器存储网IP）
             mount_cmd = f"mount -t nfs {server_ip}:{export_path} {client_mount}"
             mount_result = self.execute_on_host(host, mount_cmd, sudo=True)
 
-            # # 添加到fstab
-            # fstab_entry = f"{server_ip}:{export_path} {client_mount} nfs rw,sync,hard,intr,timeo=5,retrans=3 0 0"
-            # fstab_cmd = f'grep -q "{fstab_entry}" /etc/fstab || echo "{fstab_entry}" >> /etc/fstab'
-            # self.execute_on_host(host, fstab_cmd, sudo=True)
+            if not mount_result.get("success", False):
+                # 挂载失败，尝试带重试选项
+                self.logger.warning(f"[{host}] 首次挂载失败，尝试带选项重试...")
+                mount_cmd_retry = f"mount -t nfs -o rw,sync,hard,timeo=5,retrans=3 {server_ip}:{export_path} {client_mount}"
+                mount_result = self.execute_on_host(host, mount_cmd_retry, sudo=True)
+
+            # 添加到fstab（持久化挂载）
+            fstab_entry = f"{server_ip}:{export_path} {client_mount} nfs rw,sync,hard,timeo=5,retrans=3 0 0"
+            fstab_cmd = f'grep -q "{fstab_entry}" /etc/fstab || echo "{fstab_entry}" >> /etc/fstab'
+            self.execute_on_host(host, fstab_cmd, sudo=True)
 
             # 验证挂载
-            verify_cmd = f"df -h {client_mount}"
-            verify_result = self.execute_on_host(host, verify_cmd)
+            verify_cmd = f"mountpoint -q {client_mount} && echo 'mounted' || echo 'not_mounted'"
+            verify_result = self.execute_on_host(host, verify_cmd, sudo=True)
+            is_mounted = verify_result.get("stdout", "").strip() == "mounted"
+
+            if not is_mounted:
+                # 再次尝试df验证（mountpoint可能不可用）
+                df_verify = f"df -h {client_mount} 2>/dev/null | grep -q '{server_ip}' && echo 'mounted' || echo 'not_mounted'"
+                df_result = self.execute_on_host(host, df_verify, sudo=True)
+                is_mounted = df_result.get("stdout", "").strip() == "mounted"
 
             results[host] = {
-                "success": mount_result["success"] and verify_result["success"],
+                "success": mount_result.get("success", False) and is_mounted,
                 "mount": mount_result,
-                "verify": verify_result
+                "mounted": is_mounted
             }
 
         success_count = sum(1 for r in results.values() if r.get("success"))
@@ -225,8 +248,8 @@ class NFSConfig(BaseStep):
         return StepResult(
             step_id=self.step_id,
             step_name=self.step_name,
-            status=StepStatus.SUCCESS if success_count == len(hosts) else StepStatus.FAILED,
-            message=f"NFS配置完成，成功: {success_count}/{len(hosts)}",
+            status=StepStatus.SUCCESS if success_count == len(results) else StepStatus.FAILED,
+            message=f"NFS配置完成，成功: {success_count}/{len(results)}",
             details={
                 "server_ip": server_ip,
                 "export_path": export_path,
@@ -243,9 +266,11 @@ class NFSConfig(BaseStep):
 
         参考 conf-git/deliveryTest/base_step5_deployServ.sh NFS_FILE_UNSHARE 逻辑：
         1. 单节点检查，跳过
-        2. 在服务器端：SSH到每个客户端节点执行umount
-        3. 清理/etc/exports中相关条目
-        4. 在客户端：删除fstab条目
+        2. 在每个客户端节点上卸载NFS（cd /root避免device busy）
+        3. 验证卸载成功
+        4. 清理客户端fstab条目
+        5. 清理服务器端/etc/exports中相关条目
+        6. 验证服务器端exports已清理
         """
         nfs_config = self.config.nfs
         results = {}
@@ -320,15 +345,19 @@ class NFSConfig(BaseStep):
             if not umount_result.get("success", False):
                 # 正常卸载失败，尝试懒卸载
                 self.logger.warning(f"[{host}] 正常卸载失败，尝试懒卸载(umount -l)...")
-                lazy_umount_cmd = f"umount -l {client_mount}"
+                lazy_umount_cmd = f"cd /root && umount -l {client_mount}"
                 lazy_result = self.execute_on_host(host, lazy_umount_cmd, sudo=True)
 
                 if not lazy_result.get("success", False):
                     self.logger.error(f"[{host}] 懒卸载也失败，请手动检查占用进程: lsof +D {client_mount}")
                     results[host] = {"success": False, "message": f"卸载失败，请手动检查: lsof +D {client_mount}"}
+                    # 即使卸载失败，也清理fstab
+                    self._remove_fstab_entry(host, server_ip, export_path, client_mount)
                     continue
 
-            # 验证卸载是否成功
+            # 验证卸载是否成功（等待2秒让系统状态更新）
+            import time
+            time.sleep(2)
             verify_cmd = f"mount | grep -q '{server_ip}:{export_path}' && echo 'still_mounted' || echo 'unmounted'"
             verify_result = self.execute_on_host(host, verify_cmd, sudo=True)
             verify_status = verify_result.get("stdout", "").strip()
@@ -336,9 +365,10 @@ class NFSConfig(BaseStep):
             if verify_status == "still_mounted":
                 self.logger.error(f"[{host}] 卸载后仍处于挂载状态，请手动检查")
                 results[host] = {"success": False, "message": "卸载后仍处于挂载状态"}
+                self._remove_fstab_entry(host, server_ip, export_path, client_mount)
                 continue
 
-            # 删除挂载点目录
+            # 删除挂载点目录（仅在目录为空时）
             rmdir_cmd = f"rmdir {client_mount} 2>/dev/null || true"
             self.execute_on_host(host, rmdir_cmd, sudo=True)
 
@@ -354,14 +384,26 @@ class NFSConfig(BaseStep):
         check_result = self.execute_on_host(server_ip, check_exports_cmd, sudo=True)
 
         if check_result.get("stdout", "").strip() == "exists":
+            # 备份exports文件
+            backup_cmd = f"test -f /etc/exports.bak || cp /etc/exports /etc/exports.bak"
+            self.execute_on_host(server_ip, backup_cmd, sudo=True)
+
             # 从/etc/exports中移除包含export_path的行
             sed_cmd = f"sed -i '\\|{export_path}|d' /etc/exports"
             self.execute_on_host(server_ip, sed_cmd, sudo=True)
 
+            # 验证exports已清理
+            verify_exports_cmd = f"grep -q '{export_path}' /etc/exports 2>/dev/null && echo 'still_exists' || echo 'cleaned'"
+            verify_exports_result = self.execute_on_host(server_ip, verify_exports_cmd, sudo=True)
+
+            if verify_exports_result.get("stdout", "").strip() == "still_exists":
+                self.logger.warning(f"[{server_ip}] exports条目仍存在，可能sed删除失败")
+            else:
+                self.logger.info(f"[{server_ip}] exports中相关条目已移除")
+
             # 刷新exports
             exportfs_cmd = "exportfs -arv"
             self.execute_on_host(server_ip, exportfs_cmd, sudo=True)
-            self.logger.info(f"[{server_ip}] exports中相关条目已移除")
         else:
             self.logger.info(f"[{server_ip}] exports中无相关条目，跳过")
 

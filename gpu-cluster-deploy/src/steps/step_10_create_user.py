@@ -11,7 +11,7 @@ class CreateUser(BaseStep):
 
     step_id = "10"
     step_name = "创建ubuntu用户"
-    step_description = "创建ubuntu用户（uid 1001, gid 1001），配置免密sudo"
+    step_description = "创建ubuntu用户（uid 1000, gid 1000），配置免密sudo"
     requires_sudo = True
     supports_batch = True
 
@@ -79,11 +79,12 @@ class CreateUser(BaseStep):
 
         if need_create:
             # 2. 创建用户组
-            group_cmd = "groupadd -g 1001 ubuntu 2>/dev/null || true"
+            # Ubuntu系统默认第一个用户uid=1000 gid=1000，保持一致
+            group_cmd = "groupadd -g 1000 ubuntu 2>/dev/null || true"
             self.execute_batch(need_create, group_cmd, sudo=True)
 
             # 3. 创建用户
-            user_cmd = "useradd -u 1001 -g 1001 -m -s /bin/bash ubuntu"
+            user_cmd = "useradd -u 1000 -g 1000 -m -s /bin/bash ubuntu"
             user_result = self.execute_batch(need_create, user_cmd, sudo=True)
 
             for host, res in user_result.results.items():

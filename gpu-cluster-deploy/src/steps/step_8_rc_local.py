@@ -34,8 +34,13 @@ WantedBy=multi-user.target'''
 
     def execute(self, hosts: List[str]) -> StepResult:
         """执行rc.local配置"""
-        # 1. 创建systemd服务文件（使用 echo | tee 替代 heredoc）
-        service_cmd = f"echo '{self.SERVICE_CONTENT}' | sudo tee /lib/systemd/system/rc-local.service"
+        # 1. 创建systemd服务文件（仅在文件不存在或内容不同时覆盖）
+        service_cmd = f"""if [ ! -f /lib/systemd/system/rc-local.service ]; then
+    echo '{self.SERVICE_CONTENT}' | tee /lib/systemd/system/rc-local.service
+    echo "created"
+else
+    echo "already_exists"
+fi"""
         service_result = self.execute_batch(hosts, service_cmd, sudo=True)
 
         failed = [h for h, r in service_result.results.items() if not r.success]
@@ -48,8 +53,17 @@ WantedBy=multi-user.target'''
                 host_results=service_result.results
             )
 
-        # 2. 创建rc.local脚本（使用 echo | tee）
-        rclocal_cmd = "echo '#!/bin/bash' | sudo tee /etc/rc.local && sudo chmod 755 /etc/rc.local"
+        # 2. 创建rc.local脚本（仅在文件不存在时创建，避免覆盖已有内容）
+        rclocal_cmd = """if [ ! -f /etc/rc.local ]; then
+    echo '#!/bin/bash' | tee /etc/rc.local && chmod 755 /etc/rc.local
+    echo "created"
+else
+    # 确保文件有执行权限
+    chmod 755 /etc/rc.local
+    # 确保文件以#!/bin/bash开头
+    head -1 /etc/rc.local | grep -q '^#!/bin/bash' || sed -i '1i#!/bin/bash' /etc/rc.local
+    echo "already_exists"
+fi"""
         rclocal_result = self.execute_batch(hosts, rclocal_cmd, sudo=True)
 
         failed = [h for h, r in rclocal_result.results.items() if not r.success]
@@ -62,15 +76,15 @@ WantedBy=multi-user.target'''
                 host_results=rclocal_result.results
             )
 
-        # 3. 启用服务
-        enable_cmd = "systemctl daemon-reload && systemctl enable rc-local.service"
+        # 3. 启用并重启服务（daemon-reload + enable + restart）
+        enable_cmd = "systemctl daemon-reload && systemctl enable rc-local.service && systemctl restart rc-local.service"
         enable_result = self.execute_batch(hosts, enable_cmd, sudo=True)
 
         failed = [h for h, r in enable_result.results.items() if not r.success]
 
         if failed:
-            # 即使启用失败也视为成功（rc.local 非必需）
-            self.logger.warning(f"rc-local服务启用失败，但不影响部署: {failed}")
+            # 即使启用/重启失败也视为成功（rc.local 非必需）
+            self.logger.warning(f"rc-local服务启用/重启失败，但不影响部署: {failed}")
 
         return StepResult(
             step_id=self.step_id,

@@ -151,14 +151,16 @@ class NFSConfig:
 
 @dataclass
 class TimeSyncConfig:
-    """时间同步配置"""
+    """时间同步与DNS配置"""
     server: Optional[str] = None
     timezone: str = "Asia/Shanghai"
+    dns_servers: str = "223.5.5.5"  # DNS服务器，多个用空格分隔（如 "223.5.5.5 8.8.8.8"）
 
     def to_dict(self) -> Dict:
         return {
             "server": self.server,
-            "timezone": self.timezone
+            "timezone": self.timezone,
+            "dns_servers": self.dns_servers
         }
 
 

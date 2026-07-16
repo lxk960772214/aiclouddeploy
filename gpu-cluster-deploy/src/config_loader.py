@@ -254,8 +254,8 @@ class ConfigLoader:
         # 解析批量节点配置
         node_batch_raw = raw.get("node_batch", {})
 
-        # 解析存储模板
-        storage_template_raw = node_batch_raw.get("storage_template", {})
+        # 解析存储模板（兼容 storage 和 storage_template 两种写法）
+        storage_template_raw = node_batch_raw.get("storage_template") or node_batch_raw.get("storage") or {}
         storage_template = None
         if storage_template_raw:
             storage_template = StorageConfig(
@@ -311,7 +311,8 @@ class ConfigLoader:
         time_sync_raw = raw.get("time_sync", {})
         time_sync = TimeSyncConfig(
             server=time_sync_raw.get("server"),
-            timezone=time_sync_raw.get("timezone", "Asia/Shanghai")
+            timezone=time_sync_raw.get("timezone", "Asia/Shanghai"),
+            dns_servers=time_sync_raw.get("dns_servers", "223.5.5.5")
         )
 
         # 解析网络配置

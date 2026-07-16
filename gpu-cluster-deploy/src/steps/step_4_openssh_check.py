@@ -106,6 +106,10 @@ class OpenSSHCheck(BaseStep):
                     details={"versions": ssh_versions, "vulnerable": still_vulnerable}
                 )
 
+            # 升级成功，清空vulnerable_hosts列表
+            vulnerable_hosts = []
+            self.logger.info("OpenSSH升级成功，所有节点版本已安全")
+
         if not vulnerable_hosts:
             return StepResult(
                 step_id=self.step_id,

@@ -205,6 +205,7 @@ class BaseStep(ABC):
                 status=StepStatus.FAILED,
                 message="前置检查失败"
             )
+            self._last_result = result
             self.logger.end_step(self.step_id, success=False, message="前置检查失败")
             return result
 
@@ -266,6 +267,7 @@ class BaseStep(ABC):
                     # 后置检查
                     if self.post_check(hosts_to_execute):
                         self._status = StepStatus.SUCCESS
+                        self._last_result = result
                         result.duration = time.time() - start_time
 
                         # 添加跳过信息
@@ -344,6 +346,7 @@ class BaseStep(ABC):
         # 所有重试都失败
         self._status = StepStatus.FAILED
         result.duration = time.time() - start_time
+        self._last_result = result
         self.logger.end_step(
             self.step_id,
             success=False,

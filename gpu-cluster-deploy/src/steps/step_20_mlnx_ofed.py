@@ -255,7 +255,7 @@ echo "UNINSTALL_DONE"
             # MLNX_OFED tar包结构: MLNX_OFED_LINUX-xxx/mlnxofedinstall
             # 解压后需要找到正确的子目录
             extract_base = "/tmp/mlnx_ofed"
-            extract_cmd = f"rm -rf {extract_base} && mkdir -p {extract_base} && tar -xzf {driver_file} -C {extract_base}"
+            extract_cmd = f"rm -rf {extract_base} && mkdir -p {extract_base} && tar -xf {driver_file} -C {extract_base}"
             extract_result = self.execute_on_host(host, extract_cmd, sudo=True, timeout=120)
 
             if not extract_result.get("success"):

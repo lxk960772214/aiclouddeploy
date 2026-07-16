@@ -4,12 +4,15 @@ cuda:
   download_url: "https://developer.download.nvidia.com/compute/cuda/13.0.0/local_installers/cuda_13.0.0_580.65.06_linux.run"
 
 nvidia_driver:
-  version: "595.80"
-  file: "NVIDIA-Linux-x86_64-595.80.run"
-  local_file: "packages/NVIDIA-Linux-x86_64-595.80.run"
+  version: "590.48.01"
+  file: "NVIDIA-Linux-x86_64-590.48.01.run"
+  local_file: "packages/NVIDIA-Linux-x86_64-590.48.01.run"
 
 mlnx_ofed:
-  enabled: false
+  version: "24.10-2.1.8.0"
+  file: "MLNX_OFED_LINUX-24.10-2.1.8.0-ubuntu22.04-x86_64.tgz"
+  enabled: true
+  local_file: "packages/MLNX_OFED_LINUX-24.10-2.1.8.0-ubuntu22.04-x86_64.tar"  # 相对路径（基于项目根目录）
 
 kernel:
   mode: "keep"
@@ -63,7 +66,7 @@ test_packages:
   gpuburn_duration: 600  # 测试时长(秒)
 
   # NCCL测试配置
-  nccl_test_size: "128M"  # 测试数据大小，B200/RTX5090建议2G
+  nccl_test_size: "2G"  # 测试数据大小，B200/RTX5090建议2G
 
   # 编译并行进程数，null表示自动(nproc)，可设置为固定值如8
   # 适用于NCCL、OpenMPI、NCCL-tests等所有编译步骤

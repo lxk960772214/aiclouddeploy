@@ -157,10 +157,17 @@ nfs:
   export_path: "/ssd/nfs"    # 服务器导出路径
   client_mount: "/data"      # 客户端挂载路径
 
-# 时间同步配置
+# 时间同步与DNS配置
 time_sync:
   server: "gpu-master"       # 时间服务器主机名
   timezone: "Asia/Shanghai"
+  dns_servers: "223.5.5.5"  # DNS服务器，多个用空格分隔（如 "223.5.5.5 8.8.8.8"）
+
+# SSH免密配置
+ssh_key:
+  enabled: true              # 是否启用免密配置
+  users:                     # 要配置免密的用户列表（优先级高于 deploy_user）
+    - root                   # 有跳板机时，此用户的密钥对将复用跳板机的密钥，不在节点重新生成
 
 # 用户配置
 users:

@@ -67,6 +67,18 @@ def parse_args():
     )
 
     parser.add_argument(
+        "--config",
+        dest="config_file",
+        help="直接指定集群配置文件路径 (如 config/cluster.yaml)，覆盖 --config-dir"
+    )
+
+    parser.add_argument(
+        "--versions-config",
+        dest="versions_file",
+        help="直接指定版本配置文件路径 (如 config/versions.yaml)，覆盖 --config-dir"
+    )
+
+    parser.add_argument(
         "--phase", "-p",
         type=int,
         action="append",
@@ -158,8 +170,11 @@ def parse_args():
 class GPUClusterDeploy:
     """GPU集群部署主类"""
 
-    def __init__(self, config_dir: str = "config", log_level: str = "INFO", log_dir: str = "logs"):
+    def __init__(self, config_dir: str = "config", log_level: str = "INFO", log_dir: str = "logs",
+                 config_file: str = None, versions_file: str = None):
         self.config_dir = config_dir
+        self.config_file = config_file
+        self.versions_file = versions_file
         self.log_level = log_level
         self.log_dir = log_dir
 
@@ -183,9 +198,28 @@ class GPUClusterDeploy:
         self.logger.info("正在加载配置...")
 
         try:
-            self.loader = ConfigLoader(self.config_dir)
-            self.config = self.loader.load_cluster_config()
-            self.versions = self.loader.load_versions_config()
+            # 如果直接指定了配置文件，从文件路径推导 config_dir
+            if self.config_file:
+                config_path = Path(self.config_file)
+                config_dir = str(config_path.parent)
+                cluster_filename = config_path.name
+            else:
+                config_dir = self.config_dir
+                cluster_filename = "cluster.yaml"
+
+            if self.versions_file:
+                versions_path = Path(self.versions_file)
+                versions_dir = str(versions_path.parent)
+                versions_filename = versions_path.name
+                # 如果 config_file 没指定但 versions_file 指定了，用 versions_file 的目录
+                if not self.config_file:
+                    config_dir = versions_dir
+            else:
+                versions_filename = "versions.yaml"
+
+            self.loader = ConfigLoader(config_dir)
+            self.config = self.loader.load_cluster_config(filename=cluster_filename)
+            self.versions = self.loader.load_versions_config(filename=versions_filename)
 
             errors = self.loader.validate()
             if errors:
@@ -266,7 +300,7 @@ class GPUClusterDeploy:
         # 根据phase_id获取步骤 - 使用实际的步骤ID
         phase_steps = {
             0: ["00"],  # 设备检查
-            1: ["0d", "09", "01"],  # 初始化配置（SSH免密、hosts、依赖）- SSH免密完成后可用密钥认证
+            1: ["0d", "0e", "0f", "09", "01"],  # 初始化配置（SSH免密、禁密码、DNS、hosts、依赖）
             2: ["02", "02b", "03", "04"],  # 系统检查（内核、glibc、OpenSSH）
             3: ["05", "06", "07", "08", "15", "16", "17", "18", "19"],  # 系统基础配置
             4: ["10", "12", "13"],  # 用户和权限配置
@@ -375,6 +409,21 @@ class GPUClusterDeploy:
                     success = False
                     break
 
+        # 收集失败步骤信息
+        failed_steps = []
+        if not success:
+            for sid, step in self.steps.items():
+                from src.steps.base import StepStatus
+                if step.status == StepStatus.FAILED:
+                    msg = ""
+                    if hasattr(step, '_last_result') and step._last_result:
+                        msg = step._last_result.message
+                    failed_steps.append({
+                        "step_id": sid,
+                        "step_name": step.step_name,
+                        "message": msg
+                    })
+
         # 执行最终验证（仅在完整部署时执行）
         if success and "99" in self.steps and not steps and not phases:
             self.logger.info("\n" + "=" * 60)
@@ -404,7 +453,15 @@ class GPUClusterDeploy:
         self.ssh_manager.close_all()
 
         self.logger.info("=" * 60)
-        self.logger.info(f"部署{'成功' if success else '失败'}")
+        if success:
+            self.logger.info("部署成功")
+        else:
+            self.logger.info("部署失败")
+            if failed_steps:
+                self.logger.info("-" * 60)
+                self.logger.info("失败步骤汇总:")
+                for fs in failed_steps:
+                    self.logger.info(f"  [{fs['step_id']}] {fs['step_name']}: {fs['message']}")
         self.logger.info("=" * 60)
 
         return success
@@ -443,7 +500,9 @@ def main():
     deploy = GPUClusterDeploy(
         config_dir=args.config_dir,
         log_level=args.log_level,
-        log_dir=args.log_dir
+        log_dir=args.log_dir,
+        config_file=args.config_file,
+        versions_file=args.versions_file
     )
 
     if args.report_only:
@@ -480,7 +539,7 @@ def run_new_cli(args):
         execution_mode = ExecutionMode.PLAN
 
     config = CLIConfig(
-        config_dir=args.config_dir,
+        config_dir=args.config_file.rsplit('/', 1)[0] if args.config_file else args.config_dir,
         log_level=args.log_level,
         log_dir=args.log_dir,
         dry_run=args.dry_run,
