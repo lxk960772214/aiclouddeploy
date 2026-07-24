@@ -71,6 +71,28 @@ class FabricManager(BaseStep):
 
             deb_file = f"/tmp/nvidia-fabricmanager-{major_version}_{driver_version}-1_{arch}.deb"
 
+            # 方法0: 优先使用本地 deb（配置了 fabricmanager_local_file 且文件存在）
+            driver_config = getattr(self, 'versions', None) and getattr(self.versions, 'nvidia_driver', None)
+            local_deb = getattr(driver_config, 'fabricmanager_local_file', None) if driver_config else None
+            if local_deb:
+                if not os.path.exists(local_deb):
+                    self.logger.warning(f"[{host}] 本地deb配置存在但文件不存在: {local_deb}，回退到在线下载")
+                else:
+                    self.logger.info(f"[{host}] 使用本地deb: {local_deb}")
+                    # 远端路径用本地deb的文件名，避免不同版本互相覆盖
+                    remote_deb = f"/tmp/{os.path.basename(local_deb)}"
+                    upload_result = self.put_file([host], local_deb, remote_deb)
+                    if upload_result.get(host):
+                        install_cmd = f"dpkg -i {remote_deb} 2>&1 || apt-get install -f -y"
+                        install_result = self.execute_on_host(host, install_cmd, sudo=True, timeout=120)
+                        if install_result.get("success"):
+                            install_success = True
+                            self.logger.info(f"[{host}] 本地deb安装成功")
+                        else:
+                            self.logger.warning(f"[{host}] 本地deb安装失败，回退到在线下载")
+                    else:
+                        self.logger.warning(f"[{host}] 本地deb上传失败，回退到在线下载")
+
             # 方法1: 尝试从 NVIDIA 官方仓库下载（支持多个 Ubuntu 版本）
             download_urls = [
                 # 当前系统版本的仓库
@@ -82,7 +104,10 @@ class FabricManager(BaseStep):
                 f"https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2004/{arch}/nvidia-fabricmanager-{major_version}_{driver_version}-1_{arch}.deb",
             ]
 
+            # 方法1: 尝试从 NVIDIA 官方仓库下载（支持多个 Ubuntu 版本）
             for url in download_urls:
+                if install_success:
+                    break
                 self.logger.info(f"[{host}] 尝试下载: {url}")
                 # 使用智能下载（监控文件增长，无固定超时）
                 download_result = self.smart_download(

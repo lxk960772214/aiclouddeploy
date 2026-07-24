@@ -176,18 +176,17 @@ class CUDAToolkit(BaseStep):
 # 1. 运行CUDA卸载工具（如果存在）
 test -f /usr/local/cuda/bin/cuda-uninstaller && /usr/local/cuda/bin/cuda-uninstaller -s || true
 
-# 2. 清理处于rc状态的cuda相关包（避免依赖解析失败）
-dpkg --purge $(dpkg -l | grep -E '^rc.*cuda|^rc.*nvidia-cuda' | awk '{print $2}') 2>/dev/null || true
+# 注: 不再执行 apt/dpkg 批量 purge cuda 包
+# 原因: 'libcuda*' 会误伤驱动的 libcuda1 用户态库, 进而破坏 nvidia-smi /
+#       fabricmanager / container toolkit; 而 nvidia-fabricmanager 本身不受影响
+#       (包名不含 cuda)。toolkit 通过 cuda-uninstaller + 残留文件清理即可干净卸载。
 
-# 3. 清理apt安装的CUDA包
-apt-get purge -y 'cuda*' 'libcuda*' 'nvidia-cuda*' 2>/dev/null || true
-
-# 4. 清理残留文件
+# 2. 清理残留文件
 rm -rf /usr/local/cuda-* 2>/dev/null || true
 rm -rf /usr/local/cuda 2>/dev/null || true
 rm -f /etc/profile.d/cuda.sh 2>/dev/null || true
 
-# 5. 清理环境变量
+# 3. 清理环境变量
 sed -i '/\\/usr\\/local\\/cuda/d' /etc/profile 2>/dev/null || true
 
 echo "UNINSTALL_DONE"
@@ -201,20 +200,6 @@ echo "UNINSTALL_DONE"
                 self.logger.info(f"[{host}] CUDA卸载完成")
             else:
                 self.logger.warning(f"[{host}] CUDA卸载可能未完全成功")
-
-        return results
-
-    def _install_deps_batch(self, hosts: List[str]) -> Dict[str, bool]:
-        """批量安装依赖"""
-        self.logger.info(f"[{self.step_id}] 批量安装依赖（{len(hosts)}个节点）...")
-
-        deps_cmd = "apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y build-essential libglu1-mesa libxi-dev libxmu-dev libglu1-mesa-dev"
-        summary = self.execute_batch(hosts, deps_cmd, sudo=True)
-
-        results = {host: result.success for host, result in summary.results.items()}
-        failed = [h for h, success in results.items() if not success]
-        if failed:
-            self.logger.warning(f"依赖安装失败的节点: {failed}")
 
         return results
 
@@ -375,24 +360,11 @@ grep -q 'export LD_LIBRARY_PATH=/usr/local/cuda/lib64' /etc/profile || echo "exp
                 host_results=results
             )
 
-        # 4. 批量安装依赖
-        deps_results = self._install_deps_batch(hosts_ready)
-        hosts_deps_ok = [h for h, success in deps_results.items() if success]
-        for host in hosts_ready:
-            if host not in hosts_deps_ok:
-                results[host] = {"success": False, "error": "依赖安装失败"}
+        # 注: 不再在安装前执行 apt-get install build-essential libglu1-mesa ...
+        #     CUDA .run 安装包(--toolkit --silent)自带所需依赖, 无需预先 apt 安装
 
-        if not hosts_deps_ok:
-            return StepResult(
-                step_id=self.step_id,
-                step_name=self.step_name,
-                status=StepStatus.FAILED,
-                message="所有节点的依赖安装失败",
-                host_results=results
-            )
-
-        # 5. 批量安装CUDA
-        install_results = self._install_cuda_batch(hosts_deps_ok, package_paths, target_version)
+        # 4. 批量安装CUDA
+        install_results = self._install_cuda_batch(hosts_ready, package_paths, target_version)
         results.update(install_results)
 
         # 汇总结果

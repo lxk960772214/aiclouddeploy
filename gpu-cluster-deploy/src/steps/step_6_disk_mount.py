@@ -41,42 +41,51 @@ class DiskMount(BaseStep):
         # 2. 卸载现有挂载（该设备上的任何分区）
         self._unmount_device_partitions(host, device)
 
-        # 3. 获取设备信息（检查是否已格式化）
+        # 3. 获取设备信息（检查是否已格式化 + 实际文件系统类型）
         blkid_cmd = f"blkid {device}"
         blkid_result = self.execute_on_host(host, blkid_cmd, sudo=True)
         is_formatted = blkid_result["success"]
         results["already_formatted"] = is_formatted
 
-        uuid = None
-        # 4. 条件格式化
-        if format_disk and not is_formatted:
-            self.logger.info(f"[{host}] 格式化设备 {device} 为 {filesystem}")
+        actual_fs = self._detect_filesystem_type(host, device)
+        results["actual_filesystem"] = actual_fs
+        results["filesystem"] = filesystem
+
+        # 4. 格式化或类型校验
+        if format_disk:
+            # format_disk=true：无条件按配置的 filesystem 重新格式化
+            # （即便设备已格式化也重新格式化，确保类型与配置一致）
+            self.logger.info(f"[{host}] 格式化设备 {device} 为 {filesystem}（format_disk=true）")
             format_cmd = f"mkfs.{filesystem} -F {device}"
             format_result = self.execute_on_host(host, format_cmd, sudo=True)
             results["format"] = format_result
-
             if not format_result["success"]:
                 return {"success": False, "error": f"格式化设备 {device} 失败", "results": results}
-        elif format_disk and is_formatted:
-            self.logger.warning(f"[{host}] 设备 {device} 已格式化，跳过格式化步骤")
-            results["format"] = {"success": True, "message": "已格式化，跳过"}
-        elif not format_disk:
-            self.logger.info(f"[{host}] 配置为不格式化设备 {device}")
-            results["format"] = {"success": True, "message": "配置不格式化，跳过"}
+            fstab_fs = filesystem
+        else:
+            # format_disk=false：不格式化，但必须校验实际类型与配置一致，
+            # 不一致则报错跳过挂载，避免悄悄按实际类型挂载造成隐藏错误。
+            if not is_formatted:
+                return {
+                    "success": False,
+                    "error": f"设备 {device} 未格式化且 format_disk=false，拒绝挂载（请设置 format_disk=true 或先手动格式化为 {filesystem}）",
+                    "results": results,
+                }
+            if actual_fs != filesystem:
+                return {
+                    "success": False,
+                    "error": f"设备 {device} 实际文件系统为 '{actual_fs}'，与配置 filesystem='{filesystem}' 不符（format_disk=false），拒绝挂载以避免隐藏错误",
+                    "results": results,
+                }
+            results["format"] = {"success": True, "message": "format_disk=false，类型匹配，跳过格式化"}
+            fstab_fs = filesystem  # 与 actual_fs 一致
 
         # 5. 获取UUID（格式化后或已有）
         uuid_cmd = f"blkid {device} -s UUID -o value"
         uuid_result = self.execute_on_host(host, uuid_cmd, sudo=True)
         if not uuid_result["success"]:
-            # 如果配置不格式化且没有UUID，尝试使用设备路径
-            if not format_disk:
-                self.logger.info(f"[{host}] 使用设备路径 {device} 代替UUID")
-                uuid = device
-            else:
-                return {"success": False, "error": "获取UUID失败", "results": results}
-        else:
-            uuid = uuid_result["stdout"].strip()
-
+            return {"success": False, "error": "获取UUID失败", "results": results}
+        uuid = uuid_result["stdout"].strip()
         results["uuid"] = uuid
 
         # 6. 创建挂载点
@@ -95,9 +104,9 @@ class DiskMount(BaseStep):
             umount_cmd = f"umount {mount_point}"
             self.execute_on_host(host, umount_cmd, sudo=True)
 
-        # 8. 添加到fstab
+        # 8. 添加到fstab（类型已校验/已格式化为配置值，直接使用配置 filesystem）
         fstab_uuid = self._build_fstab_uuid(uuid, device)
-        fstab_entry = f"{fstab_uuid} {mount_point} {filesystem} defaults,nofail 0 0"
+        fstab_entry = f"{fstab_uuid} {mount_point} {fstab_fs} defaults,nofail 0 0"
 
         # 移除现有同挂载点条目
         self._remove_fstab_entry(host, mount_point)
@@ -298,41 +307,49 @@ class DiskMount(BaseStep):
         if "raid_ready" not in wait_result.get("stdout", ""):
             return {"success": False, "error": f"RAID设备 {raid_device} 未就绪"}
 
-        # 9. 检查 RAID 是否已格式化
+        # 9. 检查 RAID 是否已格式化 + 实际文件系统类型
         blkid_cmd = f"blkid {raid_device}"
         blkid_result = self.execute_on_host(host, blkid_cmd, sudo=True)
         is_formatted = blkid_result["success"]
         results["already_formatted"] = is_formatted
 
-        uuid = None
-        # 10. 条件格式化
-        if format_disk and not is_formatted:
-            self.logger.info(f"[{host}] 格式化RAID设备 {raid_device} 为 {filesystem}")
+        actual_fs = self._detect_filesystem_type(host, raid_device)
+        results["actual_filesystem"] = actual_fs
+        results["filesystem"] = filesystem
+
+        # 10. 格式化或类型校验
+        if format_disk:
+            # format_disk=true：无条件按配置的 filesystem 重新格式化
+            self.logger.info(f"[{host}] 格式化RAID设备 {raid_device} 为 {filesystem}（format_disk=true）")
             format_cmd = f"mkfs.{filesystem} -F {raid_device}"
             format_result = self.execute_on_host(host, format_cmd, sudo=True, timeout=600)
             results["format"] = format_result
-
             if not format_result["success"]:
                 return {"success": False, "error": f"格式化RAID设备 {raid_device} 失败", "results": results}
-        elif format_disk and is_formatted:
-            self.logger.warning(f"[{host}] RAID设备 {raid_device} 已格式化，跳过格式化步骤")
-            results["format"] = {"success": True, "message": "已格式化，跳过"}
-        elif not format_disk:
-            self.logger.info(f"[{host}] 配置为不格式化RAID设备 {raid_device}")
-            results["format"] = {"success": True, "message": "配置不格式化，跳过"}
+            fstab_fs = filesystem
+        else:
+            # format_disk=false：不格式化，校验实际类型与配置一致，否则报错跳过挂载
+            if not is_formatted:
+                return {
+                    "success": False,
+                    "error": f"RAID设备 {raid_device} 未格式化且 format_disk=false，拒绝挂载（请设置 format_disk=true 或先手动格式化为 {filesystem}）",
+                    "results": results,
+                }
+            if actual_fs != filesystem:
+                return {
+                    "success": False,
+                    "error": f"RAID设备 {raid_device} 实际文件系统为 '{actual_fs}'，与配置 filesystem='{filesystem}' 不符（format_disk=false），拒绝挂载以避免隐藏错误",
+                    "results": results,
+                }
+            results["format"] = {"success": True, "message": "format_disk=false，类型匹配，跳过格式化"}
+            fstab_fs = filesystem  # 与 actual_fs 一致
 
         # 11. 获取UUID（格式化后或已有）
         uuid_cmd = f"blkid {raid_device} -s UUID -o value"
         uuid_result = self.execute_on_host(host, uuid_cmd, sudo=True)
         if not uuid_result["success"]:
-            if not format_disk:
-                self.logger.info(f"[{host}] 使用RAID设备路径 {raid_device} 代替UUID")
-                uuid = raid_device
-            else:
-                return {"success": False, "error": "获取RAID UUID失败", "results": results}
-        else:
-            uuid = uuid_result["stdout"].strip()
-
+            return {"success": False, "error": "获取RAID UUID失败", "results": results}
+        uuid = uuid_result["stdout"].strip()
         results["uuid"] = uuid
 
         # 12. 创建挂载点
@@ -351,9 +368,9 @@ class DiskMount(BaseStep):
             umount_cmd = f"umount {mount_point}"
             self.execute_on_host(host, umount_cmd, sudo=True)
 
-        # 14. 添加到fstab
+        # 14. 添加到fstab（类型已校验/已格式化为配置值，直接使用配置 filesystem）
         fstab_uuid = self._build_fstab_uuid(uuid, raid_device)
-        fstab_entry = f"{fstab_uuid} {mount_point} {filesystem} defaults,nofail 0 0"
+        fstab_entry = f"{fstab_uuid} {mount_point} {fstab_fs} defaults,nofail 0 0"
 
         # 移除现有同挂载点条目
         self._remove_fstab_entry(host, mount_point)
@@ -379,6 +396,16 @@ class DiskMount(BaseStep):
         }
 
     # ── 工具方法 ──────────────────────────────────────────
+
+    def _detect_filesystem_type(self, host: str, device: str) -> Optional[str]:
+        """检测设备实际的文件系统类型（blkid TYPE 字段）。检测失败返回 None。"""
+        cmd = f"blkid {device} -s TYPE -o value"
+        result = self.execute_on_host(host, cmd, sudo=True)
+        if result["success"]:
+            detected = result.get("stdout", "").strip()
+            if detected:
+                return detected
+        return None
 
     def _build_fstab_uuid(self, uuid: Optional[str], fallback_device: str) -> str:
         """构建 fstab 的 UUID/设备路径字段"""

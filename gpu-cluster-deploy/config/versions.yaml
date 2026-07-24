@@ -7,6 +7,10 @@ nvidia_driver:
   version: "590.48.01"
   file: "NVIDIA-Linux-x86_64-590.48.01.run"
   local_file: "packages/NVIDIA-Linux-x86_64-590.48.01.run"
+  # fabricmanager本地deb路径（相对项目根目录或绝对路径）。
+  # 留空(null)则走在线下载；填了且文件存在则优先上传本地deb安装（避免在线下载失败）。
+  # 注意: deb版本需与本机nvidia驱动版本匹配
+  fabricmanager_local_file: "packages/nvidia-fabricmanager_590.48.01-2ubuntu1_amd64.deb"
 
 mlnx_ofed:
   version: "24.10-2.1.8.0"

@@ -256,6 +256,68 @@ unshare 流程:
 
 > **uid/gid 1000**: Ubuntu系统默认第一个用户的uid/gid是1000，保持一致避免权限混乱。
 
+## step_22/23/24 GPU驱动 + CUDA安装
+
+### step_23 fabricmanager (step_23_fabricmanager.py)
+
+```
+安装优先级:
+  方法0: fabricmanager_local_file 配置且文件存在 → put_file上传 → dpkg -i
+  方法1: NVIDIA官方仓库 smart_download (多个Ubuntu版本URL回退) → dpkg -i
+  方法2: apt安装 (cuda-keyring + apt-get install fabricmanager-*)
+
+NVLink检测: nvidia-smi nvlink --status | grep GPU, 无NVLink的节点跳过
+版本对齐: fabricmanager分支必须与nvidia驱动主版本一致 (590驱动配590 fabricmanager)
+```
+
+> **本地deb优先**: `fabricmanager_local_file` 配置在 `versions.yaml` 的 `nvidia_driver` 下,留空走在线下载。路径解析规则同 `local_file` (相对路径基于项目根目录)。在线下载失败时,本地deb是唯一可靠兜底。
+
+> **版本错配风险**: fabricmanager与驱动不同分支时服务能起来、8卡也能被访问,但NVLink拓扑可能降级或日志告警,长期不稳定。装前确认 deb 版本与 `nvidia_driver.version` 主版本号一致。
+
+> **dpkg -i不解析依赖**: `dpkg -i` 只装包本身,缺依赖时报错并留包于未配置状态,需 `apt-get install -f -y` 补。step_23 已将两步合并为 `dpkg -i ... || apt-get install -f -y`。
+
+### step_24 CUDA Toolkit (step_24_cuda_toolkit.py)
+
+```
+安装流程:
+  1. _detect_cuda_batch: nvcc -V / version.txt / /usr/local/cuda-* 三法检测
+  2. 主版本匹配 → 跳过; 主版本不匹配 → 卸载重装; 无CUDA → 直接安装
+  3. _uninstall_cuda_batch: cuda-uninstaller + 残留文件清理 + 环境变量清理
+  4. _prepare_package: 本地/local_file/download_url 三选一准备安装包
+  5. _install_cuda_batch: .run --toolkit --no-drm --silent → 软链/usr/local/cuda → /etc/profile环境变量 → nvcc -V验证
+
+is_configured: mode=keep直接True; 否则按nvcc版本与目标版本主版本号比对
+```
+
+> **卸载不再用 apt purge (关键)**: 原 `_uninstall_cuda_batch` 含 `apt-get purge 'cuda*' 'libcuda*' 'nvidia-cuda*'`,已删除。原因: `'libcuda*'` 会误伤驱动的 `libcuda1` 用户态库 (nvidia-smi/fabricmanager/container toolkit 全依赖它),purge后驱动用户态断裂。toolkit通过 `cuda-uninstaller` + 残留文件清理即可干净卸载。`nvidia-fabricmanager` 包名不含cuda,本就不受这三个通配符影响。
+
+> **安装前不再 apt 装依赖**: 原 `_install_deps_batch` (apt-get install build-essential libglu1-mesa ...) 已删除。CUDA `.run` 安装包 `--toolkit --silent` 自带所需依赖,无需预先apt安装。
+
+> **.run安装的驱动不受dpkg管理**: `.run` 包安装的 `libcuda.so.1` 直接放在 `/usr/lib/x86_64-linux-gnu/` 下,不走dpkg,故 `dpkg -l | grep libcuda` 空输出是正常现象 (非被purge),用 `ls libcuda.so*` + `ldconfig -p` 验证才准确。
+
+### step_44 GPU Burn压测 (step_44_gpuburn.py)
+
+```
+执行流程:
+  1. _get_compile_hosts 按编译策略选编译节点 (single_node/role_based/local)
+  2. 编译节点: 获取compute_cap(nvidia-smi) + cuda_version(nvcc) → 强制重编
+  3. _upload_and_build_gpuburn: 上传zip → 解压 → 恢复Makefile_bk → sed改COMPUTE/CUDA_VERSION → make
+  4. 所有GPU节点并行 _run_test_on_host: gpu_burn -tc {duration} (Tensor Core压测)
+
+nvcc自动检测: 优先 /usr/local/cuda/bin/nvcc, 回退 PATH 中的 nvcc
+  (CUDA装在/usr/local/cuda但不在PATH时, nvcc命令不可用, 必须显式走绝对路径)
+```
+
+> **skip_if_configured=False**: 压测步骤强制运行,不因 `gpu_burn` 二进制存在就跳过。否则toolkit版本变化后仍复用旧二进制,PTX不兼容。
+
+> **强制重编**: 每次都 `_upload_and_build_gpuburn`,先 `make clean` 再 `make`。确保 `compare.ptx` 用当前toolkit重新生成,避免旧toolkit编出的PTX在新环境报 `unsupported toolchain`。
+
+> **Makefile不修改CUDAPATH**: gpu-burn Makefile内置自动检测 (`/usr/bin/nvcc`→`/usr`,否则`/usr/local/cuda`)。原 `sed 's|CUDAPATH ?= /usr|...|/usr/local/cuda|'` 有缺陷: `CUDAPATH ?= /usr` 是 `CUDAPATH ?= /usr/local/cuda` 的子串,替换第二分支行会得到 `/usr/local/cuda/local/cuda` 双重路径。已删除该sed,仅改COMPUTE和CUDA_VERSION。
+
+> **Makefile幂等**: 编译前从 `Makefile_bk` 恢复干净Makefile (备份存在则恢复,否则首次备份),避免重复执行复用被污染的Makefile。
+
+> **PTX toolchain不兼容**: `cuModuleLoad` 报 `PTX was compiled with an unsupported toolchain` = 编译compare.ptx的nvcc工具链版本高于驱动能JIT的PTX ISA。根因是toolkit版本高于driver (如toolkit 13.1 + driver 580)。解决: 降toolkit到与driver匹配 (如13.0),强制重编重新生成PTX。
+
 ## BaseStep 生命周期 (base.py)
 
 ```
@@ -287,3 +349,5 @@ run() → pre_check → check_all_configured → execute → post_check
 5. **源密钥一致性**: SSH免密的源密钥必须从跳板机生成并分发到所有节点，所有节点共享同一密钥对
 6. **is_configured 精确匹配**: echo 标记用无歧义词（`yes`/`no`），用 `==` 精确匹配，禁止子串匹配（`"found" in "not_found"` 是 True！）
 7. **配置字段兼容**: ConfigLoader 解析 `node_batch` 的 `storage` 和 `storage_template` 两种写法，`auth` 和 `auth_template` 同理
+8. **apt purge 通配符风险**: 批量 `apt-get purge 'libcuda*'` 会误伤驱动的 `libcuda1` 用户态库,破坏 nvidia-smi 等依赖它的组件。`.run` 安装的包不走 dpkg,apt purge 对它无效但会误伤 apt 装的同名包。卸载 toolkit 用官方 `cuda-uninstaller`,不要用 apt 通配 purge
+9. **sed 子串陷阱**: `sed 's|CUDAPATH ?= /usr|...|'` 中 `/usr` 是 `/usr/local/cuda` 的前缀子串,会误匹配后者的前半段。做 sed 替换前先确认目标串不是其他串的子串,或改用更精确的匹配锚定

@@ -67,6 +67,7 @@ class NvidiaDriverConfig:
     file: Optional[str] = None
     download_url: Optional[str] = None
     local_file: Optional[str] = None
+    fabricmanager_local_file: Optional[str] = None  # fabricmanager本地deb路径，留空则走在线下载
     checksum: Optional[str] = None  # 校验和 (格式: sha256:xxx 或 md5:xxx)
     file_size: Optional[int] = None  # 文件大小(字节)
 
@@ -714,6 +715,7 @@ class ConfigLoader:
             file=driver_raw.get("file"),
             download_url=driver_raw.get("download_url"),
             local_file=driver_raw.get("local_file"),
+            fabricmanager_local_file=driver_raw.get("fabricmanager_local_file"),
             checksum=driver_raw.get("checksum"),
             file_size=driver_raw.get("file_size")
         )
@@ -821,14 +823,16 @@ class ConfigLoader:
         # 项目根目录 = config_dir 的父目录（config/ 的上一级）
         project_root = self.config_dir.parent.resolve()
 
-        # 解析顶层组件的 local_file
+        # 解析顶层组件的 local_file（含 fabricmanager_local_file）
         for attr_name in ['cuda', 'nvidia_driver', 'mlnx_ofed', 'nccl']:
             component = getattr(config, attr_name, None)
-            if component and hasattr(component, 'local_file') and component.local_file:
-                local_file = component.local_file
-                if not os.path.isabs(local_file):
+            if not component:
+                continue
+            for file_attr in ['local_file', 'fabricmanager_local_file']:
+                local_file = getattr(component, file_attr, None)
+                if local_file and not os.path.isabs(local_file):
                     abs_path = str(project_root / local_file)
-                    setattr(component, 'local_file', abs_path)
+                    setattr(component, file_attr, abs_path)
 
         # 解析 test_packages 中的路径
         tp = config.test_packages

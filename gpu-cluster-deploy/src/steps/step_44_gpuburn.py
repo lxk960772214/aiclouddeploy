@@ -17,6 +17,7 @@ class GPUBurnTest(BaseStep):
     step_description = "编译并运行GPU Burn测试，验证GPU性能和稳定性"
     requires_sudo = False
     supports_batch = True
+    skip_if_configured = False  # 压测步骤: 始终运行, 不因 gpu_burn 二进制存在而跳过
     timeout = 900  # 15分钟（包含600秒测试时间）
 
     def _get_toolkit_dir(self) -> str:
@@ -52,11 +53,16 @@ class GPUBurnTest(BaseStep):
         return "-j$(nproc)"
 
     def _get_cuda_version(self, host: str) -> Optional[str]:
-        """获取CUDA版本"""
-        version_cmd = "nvcc --version | grep release | awk '{print $5}' | cut -d',' -f1"
+        """获取CUDA版本（自动检查 /usr/local/cuda 目录，存在则使用其 nvcc）"""
+        # 自动检测 nvcc 路径：优先 /usr/local/cuda/bin/nvcc，回退到 PATH 中的 nvcc
+        version_cmd = (
+            "NVCC=$(test -x /usr/local/cuda/bin/nvcc && echo /usr/local/cuda/bin/nvcc || command -v nvcc); "
+            "[ -n \"$NVCC\" ] && $NVCC --version | grep release | awk '{print $5}' | cut -d',' -f1"
+        )
         result = self.execute_on_host(host, version_cmd)
         if result.get("success"):
-            return result.get("stdout", "").strip()
+            version = result.get("stdout", "").strip()
+            return version if version else None
         return None
 
     def _get_compute_cap(self, host: str) -> Optional[int]:
@@ -141,13 +147,11 @@ class GPUBurnTest(BaseStep):
         self.logger.info(f"[{host}] 配置Makefile...")
         gpuburn_dir = f"{toolkit_dir}/gpu-burn-master"
 
-        # 备份Makefile
-        backup_cmd = f"cd {gpuburn_dir} && test -f Makefile_bk || cp Makefile Makefile_bk"
+        # 保证幂等：若存在备份则从备份恢复干净Makefile，否则首次备份
+        backup_cmd = f"cd {gpuburn_dir} && test -f Makefile_bk && cp -f Makefile_bk Makefile || cp Makefile Makefile_bk"
         self.execute_on_host(host, backup_cmd)
 
-        # 修改CUDA路径
-        sed_cuda = f"cd {gpuburn_dir} && sed -i 's|CUDAPATH ?= /usr|CUDAPATH ?= /usr/local/cuda|' Makefile"
-        self.execute_on_host(host, sed_cuda)
+        # Makefile 已内置 CUDAPATH 自动检测（/usr 或 /usr/local/cuda），无需修改
 
         # 修改计算能力
         sed_compute = f"cd {gpuburn_dir} && sed -i 's|COMPUTE      ?= 75|COMPUTE      ?= {compute_cap}|' Makefile"
@@ -163,7 +167,7 @@ class GPUBurnTest(BaseStep):
         clean_cmd = f"cd {gpuburn_dir} && make clean > /dev/null 2>&1 || true"
         self.execute_on_host(host, clean_cmd)
 
-        compile_cmd = f"cd {gpuburn_dir} && make {self._get_compile_jobs_arg()} > {log_dir}/build_gpuburn.log 2>&1"
+        compile_cmd = f"cd {gpuburn_dir} && make > {log_dir}/build_gpuburn.log 2>&1"
         compile_result = self.execute_on_host(host, compile_cmd, timeout=300)
 
         if not compile_result.get("success"):
@@ -227,7 +231,7 @@ class GPUBurnTest(BaseStep):
         hostname_result = self.execute_on_host(host, hostname_cmd)
         hostname = hostname_result.get("stdout", host).strip()
 
-        self.logger.info(f"[{host}] 运行GPU Burn测试 (时长: {duration}秒)...")
+        self.logger.info(f"[{host}] 运行GPU Burn Tensor Core压测 (时长: {duration}秒)...")
         test_cmd = f"cd {toolkit_dir}/gpu-burn-master && ./gpu_burn -tc {duration} > {result_dir}/gpuburn_{hostname}.log 2>&1"
         test_result = self.execute_on_host(host, test_cmd, timeout=duration + 300)
 
@@ -267,12 +271,11 @@ class GPUBurnTest(BaseStep):
                 compile_ok = False
                 continue
 
-            check_cmd = f"test -f {self._get_toolkit_dir()}/gpu-burn-master/gpu_burn && echo 'exists' || echo 'not_exists'"
-            check_result = self.execute_on_host(host, check_cmd)
-            if "not_exists" in check_result.get("stdout", ""):
-                if not self._upload_and_build_gpuburn(host, compute_cap, cuda_version):
-                    compile_ok = False
-                    continue
+            # 始终重新编译: 确保使用当前 toolkit (如新装的 cuda 13.0) 重新生成
+            # compare.ptx, 避免旧 toolkit 编出的二进制残留导致 "unsupported toolchain"
+            if not self._upload_and_build_gpuburn(host, compute_cap, cuda_version):
+                compile_ok = False
+                continue
 
         if not compile_ok:
             return StepResult(

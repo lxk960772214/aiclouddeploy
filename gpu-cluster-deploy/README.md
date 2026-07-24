@@ -1505,6 +1505,9 @@ execute() 增加 mode=keep + lock_version 的判断逻辑
 3、节点命名之前有在/etc/hosts里面记录，step9没有删除改名前的记录，导致后检查失败了。修复一下问题。
 4、nvidia-fabricmanager安装遇到网络问题，驱动卸载失败，见/Users/liuxinke/Nutstore Files/work/裸金属/aiclouddeploy/info.txt
 5、配置多个nfs挂载目录
+6、有没有自动部署监控的功能
+7、gpu 自动检查/usr/local/cuda目录是否存在，如果存在的话加载
+
 
 ## 许可证
 
