@@ -872,11 +872,9 @@ class ConfigLoader:
             errors.append("集群配置未加载")
             return errors
 
-        if not self.cluster_config.jumphost:
-            errors.append("跳转服务器配置缺失")
-        else:
-            if not self.cluster_config.jumphost.host:
-                errors.append("跳转服务器IP未配置")
+        # jumphost 缺失 = DIRECT 模式（本机即跳板机），是合法形态；只校验配置了 jumphost 时的必备字段
+        if self.cluster_config.jumphost and not self.cluster_config.jumphost.host:
+            errors.append("跳转服务器IP未配置")
 
         # 验证节点配置
         if self.cluster_config.node_batch.enabled:

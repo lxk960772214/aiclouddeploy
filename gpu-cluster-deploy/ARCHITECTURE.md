@@ -43,6 +43,7 @@
 | LVM 明明刚释放，mdadm create 时又 busy 了 | wipefs/dd 的 udev 事件触发 LVM 自动激活（`pvscan --cache -aay`），签名未清的分区上的 VG 被重新拉起；dd 只清盘头 10MB，够不到深处分区的 PV 头 | wipe 必须覆盖全部子分区签名（`wipefs -a 盘*`）+ `partx -d` 强删内核分区表 + create 前"验证-重试"循环；见事故档案 2026-09-11 step 06 |
 | 节点 RDMA 名字对齐了，重启后又乱了 | `rdma dev set` 只写运行时，无持久化机制；且默认枚举跨机型不一致（同号不同 rail），开机后必须重新收敛 | RDMA 改名必须配 systemd oneshot 自愈脚本（每次按 IP 重新推导 rail），`is_configured` 命名+持久化双条件；见事故档案 2026-09-12 |
 | awk 匹配 rdma link 的设备名全落空 | `$2` 是 `mlx5_0/1`（含端口后缀），与 `mlx5_0/` 全等比较永假 | 提取设备名要么 `sub(/\/.*/,"")` 截断，要么用 `$2 ~ "^mlx5_N/"` 正则；见事故档案 2026-09-12 |
+| 无 `jumphost` 的 DIRECT 配置加载即退出，报"跳转服务器配置缺失" | `validate()` 沿用"必有跳板机"时代的强制校验，与运行模式约定脱节 | 校验项必须与受支持的运行模式对齐，模式性"缺失"（jumphost=None 即 DIRECT）不是配置错误 |
 
 ## 目录结构
 
@@ -105,6 +106,8 @@ cluster.yaml → ConfigLoader → ClusterConfig
 - 代码中涉及"跳板机"的逻辑，DIRECT 模式下应映射到本机
 
 > **真实拓扑提醒**: PROXY 模式下跳板机可能同时就是集群节点之一（如 shunfeng-test 集群：公网 27.190.15.191:222 即内网节点 192.168.0.20）。跳板机 SSH 到"自己这个节点"是正常路径（ssh 自身内网 IP），无需特殊处理；但排查连通性/认证问题时记住这两条路径指向同一台机器。
+
+> **常见坑**: 无 `jumphost` 的配置（DIRECT 模式）曾在校验阶段报 `"跳转服务器配置缺失"` 直接退出，DIRECT 模式实际不可用——`validate()` 沿用了"必有跳板机"时代的强制校验项，而 ssh_manager/main.py/step_0d/step_09 均已按"DIRECT 合法"实现，唯独校验没跟上。修复原则：校验逻辑必须与运行时支持的模式集对齐，"jumphost 缺失"正是 DIRECT 模式的判定条件而非错误；已改为仅在 jumphost 存在时校验 host 字段（2026-10-10）。
 
 ## 认证参数流转
 
