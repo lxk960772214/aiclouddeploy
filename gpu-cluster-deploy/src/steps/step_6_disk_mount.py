@@ -162,6 +162,53 @@ class DiskMount(BaseStep):
             # 清理 fstab 中该挂载点的条目
             self._remove_fstab_entry(host, mount_point)
 
+    def _release_lvm_on_device(self, host: str, device: str) -> None:
+        """释放成员设备上的 LVM 占用（卸载 LV、停用 VG、移除残留 dm 设备）
+
+        mdadm --create 对仍被 dm 设备（LVM 逻辑卷）持有的盘报
+        "Device or resource busy"。PV 元数据完好时 vgchange -an 即可；
+        若 PV 头已被 wipefs 清掉（先清盘后才发现 LVM 的情况），pvs/vgchange
+        都看不到该 VG，只能对 lsblk 显示的 dm 子设备逐个 dmsetup remove。
+        """
+        lsblk_cmd = f"lsblk -ln -o NAME,TYPE,MOUNTPOINT {device} 2>/dev/null"
+        result = self.execute_on_host(host, lsblk_cmd, sudo=True)
+        if not result["success"]:
+            return
+
+        dm_names = []
+        for line in result.get("stdout", "").strip().split("\n"):
+            if not line.strip():
+                continue
+            parts = line.split()
+            if len(parts) >= 2 and "lvm" in parts[1]:
+                dm_names.append(parts[0])
+                # 逻辑卷若已挂载，先卸载并清理 fstab（否则 vgchange -an 失败，
+                # 残留条目还会让后续 mount -a 报错）
+                if len(parts) >= 3 and parts[2] != "/":
+                    self.logger.info(f"[{host}] 卸载逻辑卷 {parts[0]} ({parts[2]})")
+                    self.execute_on_host(host, f"umount {parts[2]} 2>/dev/null || true", sudo=True)
+                    self._remove_fstab_entry(host, parts[2])
+
+        if not dm_names:
+            return
+
+        # 1. 规范路径：PV 元数据完好时，按 VG 停用（会停用该 VG 下全部 LV）
+        for dm_name in dm_names:
+            vg_cmd = f"dmsetup splitname {dm_name} --noheadings 2>/dev/null | cut -d: -f1"
+            vg_result = self.execute_on_host(host, vg_cmd, sudo=True)
+            vg = vg_result.get("stdout", "").strip()
+            if vg:
+                self.logger.info(f"[{host}] 停用 LVM 卷组 {vg}")
+                self.execute_on_host(host, f"vgchange -an {vg} 2>/dev/null || true", sudo=True)
+
+        # 2. 兜底：PV 头已丢失（pvs 看不到、vgchange 无效）时强制移除残留 dm
+        result = self.execute_on_host(host, lsblk_cmd, sudo=True)
+        for line in result.get("stdout", "").strip().split("\n"):
+            parts = line.split()
+            if len(parts) >= 2 and "lvm" in parts[1]:
+                self.logger.info(f"[{host}] 移除残留 dm 设备 {parts[0]}（PV 元数据已丢失）")
+                self.execute_on_host(host, f"dmsetup remove -f /dev/mapper/{parts[0]} 2>/dev/null || true", sudo=True)
+
     def _wipe_devices(self, host: str, devices: List[str]) -> None:
         """彻底清除设备上的分区表、文件系统签名和 RAID 超级块"""
         for dev in devices:
@@ -174,14 +221,20 @@ class DiskMount(BaseStep):
             zero_part_cmd = f"mdadm --zero-superblock {dev}* 2>/dev/null || true"
             self.execute_on_host(host, zero_part_cmd, sudo=True)
 
-            # 2. 清除文件系统签名和 RAID 元数据
-            wipefs_cmd = f"wipefs -a {dev} 2>/dev/null || true"
-            self.execute_on_host(host, wipefs_cmd, sudo=True)
+            # 2. 清除所有子分区 + 盘本身的文件系统/PV 签名。
+            # 必须覆盖全部分区：dd 只清盘头 10MB，深处分区的 LVM PV 头
+            # 清不到；签名一旦残留，清盘过程中的 udev 事件会触发 LVM
+            # 自动激活（pvscan --cache -aay）把 VG 重新拉起占住磁盘
+            wipe_children_cmd = f"wipefs -a {dev}* 2>/dev/null || true"
+            self.execute_on_host(host, wipe_children_cmd, sudo=True)
 
             # 3. 删除所有分区
             # sfdisk 方式删除所有分区
             delete_parts_cmd = f"sfdisk --delete {dev} 2>/dev/null || true"
             self.execute_on_host(host, delete_parts_cmd, sudo=True)
+            # partx 强制让内核丢弃分区表项（partprobe 对仍被占用的分区不生效）
+            partx_cmd = f"partx -d {dev} 2>/dev/null || true"
+            self.execute_on_host(host, partx_cmd, sudo=True)
 
             # 4. 用 dd 清零分区表头部（确保干净）
             dd_cmd = f"dd if=/dev/zero of={dev} bs=1M count=10 2>/dev/null || true"
@@ -194,6 +247,60 @@ class DiskMount(BaseStep):
             # 6. 让内核重新读取分区表
             partprobe_cmd = f"partprobe {dev} 2>/dev/null || true"
             self.execute_on_host(host, partprobe_cmd, sudo=True)
+
+    def _ensure_device_released(self, host: str, device: str, max_retries: int = 3) -> bool:
+        """确认设备已无任何子设备/占用，mdadm --create 的前置守卫。
+
+        清盘过程中 wipefs/dd 的 udev 事件可能触发 LVM 自动激活
+        （pvscan --cache -aay）：只要某个分区的 PV 签名还没被清掉，
+        VG 就会被重新拉起并占住磁盘（mdadm 报 Device or resource busy）。
+        所以必须以"验证-重试"收尾：发现残留子设备就再次
+        释放 + 清签名 + 删内核分区表；签名清干净后自动激活失去燃料，
+        循环必然收敛。
+        """
+        import time
+        lsblk_cmd = f"lsblk -ln -o NAME,TYPE,MOUNTPOINT {device} 2>/dev/null"
+        dev_name = device.replace("/dev/", "")
+
+        for attempt in range(1, max_retries + 1):
+            result = self.execute_on_host(host, lsblk_cmd, sudo=True)
+            children = []
+            for line in result.get("stdout", "").strip().split("\n"):
+                parts = line.split()
+                if len(parts) >= 2 and parts[0] != dev_name:
+                    children.append(parts[0])
+            if not children:
+                return True
+
+            self.logger.warning(
+                f"[{host}] {device} 仍有子设备 {children}（第{attempt}次清理，"
+                f"疑似 wipe 触发 LVM 自动激活），重新释放"
+            )
+            self._unmount_device_partitions(host, device)
+            self._release_lvm_on_device(host, device)
+
+            # swap 分区占用（lsblk 的 TYPE 列不含 swap，从 /proc/swaps 找）
+            swap_result = self.execute_on_host(host, "cat /proc/swaps", sudo=True)
+            for line in swap_result.get("stdout", "").split("\n")[1:]:
+                fields = line.split()
+                if fields and fields[0].startswith(device):
+                    self.logger.info(f"[{host}] 关闭交换分区 {fields[0]}")
+                    self.execute_on_host(host, f"swapoff {fields[0]} 2>/dev/null || true", sudo=True)
+
+            # 清掉所有子设备的签名（深处分区的 PV 头也在这里清）
+            self.execute_on_host(host, f"wipefs -a {device}* 2>/dev/null || true", sudo=True)
+            # 强制内核丢弃分区表项
+            self.execute_on_host(host, f"partx -d {device} 2>/dev/null || true", sudo=True)
+            self.execute_on_host(host, f"partprobe {device} 2>/dev/null || true", sudo=True)
+            time.sleep(2)
+
+        result = self.execute_on_host(host, lsblk_cmd, sudo=True)
+        for line in result.get("stdout", "").strip().split("\n"):
+            parts = line.split()
+            if len(parts) >= 2 and parts[0] != dev_name:
+                self.logger.error(f"[{host}] {device} 无法释放，仍被占用: {parts[0]}")
+                return False
+        return True
 
     def _install_mdadm(self, host: str) -> bool:
         """安装 mdadm 工具"""
@@ -256,6 +363,22 @@ class DiskMount(BaseStep):
             results["raid_correct"] = True
         else:
             # 需要重建 RAID
+            if not format_disk:
+                # 重建 = 停止旧RAID + wipefs/dd 清盘 + mdadm create，必然清空
+                # 成员盘数据。format_disk=false 的语义是"不碰盘上数据"。
+                # 单盘路径对"未格式化 + format_disk=false"早已拒绝，RAID 路径
+                # 曾漏掉此守卫：RAID 不存在时先清盘、到 mkfs 阶段才校验
+                # format_disk，等于数据已经没了才拒绝（2026-09-11 事故）。
+                why = "不存在" if not raid_exists else "与配置不匹配"
+                return {
+                    "success": False,
+                    "error": (
+                        f"RAID设备 {raid_device} {why}，重建会清空全部成员设备"
+                        f"（{', '.join(devices)}）的数据；当前 format_disk=false，拒绝执行。"
+                        f"确认成员盘数据可丢弃后，将 format_disk 设为 true 重新运行"
+                    ),
+                    "results": results,
+                }
             if raid_exists:
                 self.logger.info(f"[{host}] 停止现有 RAID 设备 {raid_device}")
                 stop_cmd = f"mdadm --stop {raid_device} 2>/dev/null || true"
@@ -264,16 +387,22 @@ class DiskMount(BaseStep):
                 import time
                 time.sleep(2)
 
-            # 4. 卸载所有成员设备上的现有挂载
+            # 4. 卸载所有成员设备上的现有挂载，并释放 LVM/dm 占用
             self.logger.info(f"[{host}] 卸载成员设备上的现有挂载")
             for dev in devices:
                 self._unmount_device_partitions(host, dev)
+                self._release_lvm_on_device(host, dev)
 
             # 5. 清除所有成员设备上的分区表和签名
             self.logger.info(f"[{host}] 清除成员设备上的分区表和签名")
             self._wipe_devices(host, devices)
 
-            # 6. 创建 RAID
+            # 6. 创建 RAID（先确认成员盘已完全释放——LVM 自动激活可能在
+            #    清盘过程中把 VG 重新拉起，必须验证后才交给 mdadm）
+            for dev in devices:
+                if not self._ensure_device_released(host, dev):
+                    return {"success": False, "error": f"成员设备 {dev} 仍被占用（LVM/分区残留），RAID创建中止", "results": results}
+
             self.logger.info(f"[{host}] 创建 RAID{raid_level}: {', '.join(devices)}")
             devices_str = " ".join(devices)
             create_cmd = (

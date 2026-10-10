@@ -410,60 +410,85 @@ class SSHManager:
         return self._runtime_mode == RuntimeMode.PROXY
 
     def connect_jumphost(self, timeout: int = 30) -> bool:
-        """连接跳转服务器"""
+        """连接跳转服务器
+
+        瞬时网络故障（Tailscale/DERP 抖动会表现为 banner 阶段
+        Connection reset by peer）重试即可恢复，最多尝试3次。
+        """
         if not self.jumphost_config:
             logger.debug("未配置跳转服务器，将使用直连模式")
             self._jump_connected = True
             return True
 
-        try:
-            self.jump_client = paramiko.SSHClient()
-            self.jump_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-
-            host = self.jumphost_config["host"]
-            port = self.jumphost_config.get("port", 22)
-            username = self.jumphost_config.get("username", "ubuntu")
-            password = self.jumphost_config.get("password")
-            private_key = self.jumphost_config.get("private_key")
-
-            if private_key:
-                key = _load_private_key(os.path.expanduser(private_key))
-                self.jump_client.connect(
-                    hostname=host,
-                    port=port,
-                    username=username,
-                    pkey=key,
-                    timeout=timeout,
-                    allow_agent=False,
-                    look_for_keys=False
+        last_error: Optional[Exception] = None
+        for attempt in range(1, 4):
+            try:
+                self._connect_jumphost_once(timeout)
+                self._jump_connected = True
+                # 尝试从跳转服务器探测用于连接内部节点的私钥
+                self._detect_jumphost_key_for_nodes(
+                    self.jumphost_config.get("username", "ubuntu")
                 )
-            else:
-                self.jump_client.connect(
-                    hostname=host,
-                    port=port,
-                    username=username,
-                    password=password,
-                    timeout=timeout,
-                    allow_agent=False,
-                    look_for_keys=False
-                )
+                return True
+            except Exception as e:
+                last_error = e
+                # 连接失败时清理半开状态，避免残留 client 影响重试
+                if self.jump_client:
+                    self.jump_client.close()
+                    self.jump_client = None
+                self._jump_connected = False
+                if attempt < 3:
+                    wait = attempt * 5
+                    logger.warning(
+                        f"跳转服务器连接失败（第{attempt}次）: {e}，{wait}秒后重试"
+                    )
+                    import time
+                    time.sleep(wait)
 
-            self._jump_connected = True
-            # 设置 keepalive，每30秒发送心跳包，防止长时间传输时连接断开
-            transport = self.jump_client.get_transport()
-            if transport:
-                transport.set_keepalive(30)
-            logger.info(f"跳转服务器连接成功: {username}@{host}:{port}")
+        logger.error(f"跳转服务器连接失败: {last_error}")
+        return False
 
-            # 尝试从跳转服务器探测用于连接内部节点的私钥
-            self._detect_jumphost_key_for_nodes(username)
+    def _connect_jumphost_once(self, timeout: int = 30) -> None:
+        """单次尝试建立跳转服务器连接，失败抛异常"""
+        if not self.jumphost_config:
+            return
 
-            return True
+        self.jump_client = paramiko.SSHClient()
+        self.jump_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 
-        except Exception as e:
-            logger.error(f"跳转服务器连接失败: {e}")
-            self._jump_connected = False
-            return False
+        host = self.jumphost_config["host"]
+        port = self.jumphost_config.get("port", 22)
+        username = self.jumphost_config.get("username", "ubuntu")
+        password = self.jumphost_config.get("password")
+        private_key = self.jumphost_config.get("private_key")
+
+        if private_key:
+            key = _load_private_key(os.path.expanduser(private_key))
+            self.jump_client.connect(
+                hostname=host,
+                port=port,
+                username=username,
+                pkey=key,
+                timeout=timeout,
+                allow_agent=False,
+                look_for_keys=False
+            )
+        else:
+            self.jump_client.connect(
+                hostname=host,
+                port=port,
+                username=username,
+                password=password,
+                timeout=timeout,
+                allow_agent=False,
+                look_for_keys=False
+            )
+
+        # 设置 keepalive，每30秒发送心跳包，防止长时间传输时连接断开
+        transport = self.jump_client.get_transport()
+        if transport:
+            transport.set_keepalive(30)
+        logger.info(f"跳转服务器连接成功: {username}@{host}:{port}")
 
     def _detect_jumphost_key_for_nodes(self, username: str):
         """
@@ -779,8 +804,19 @@ class SSHManager:
                     logger.info(f"文件已直接上传到跳转服务器: {remote_path}")
                     return True
                 else:
-                    # 使用SCP通过跳转服务器
-                    # 先传输到跳转服务器，再传输到目标主机
+                    # 优先走隧道连接直接 SFTP：conn 与命令执行是同一条
+                    # 连接、同一套认证（密码/密钥），命令能通上传就能通。
+                    # 不要先依赖跳板机上原生 scp——它要求 跳板机→节点
+                    # 已配置免密信任，未跑过免密分发的集群会在这一步
+                    # 卡在密码认证上静默失败
+                    if conn and conn.put_file(local_path, remote_path):
+                        return True
+                    logger.warning(
+                        f"隧道SFTP上传失败，回退到跳板机scp中转: {host}"
+                    )
+
+                    # 回退：先传输到跳转服务器，再传输到目标主机
+                    # （要求跳板机对各节点已配置免密）
                     jump_temp_path = f"/tmp/{os.path.basename(local_path)}"
 
                     # 上传到跳转服务器
@@ -795,9 +831,8 @@ class SSHManager:
                     ls_output = stdout.read().decode().strip()
                     logger.info(f"跳转服务器文件状态: {ls_output}")
 
-                    # 从跳转服务器传输到目标主机
-                    # 免密配置完成后，直接使用 scp 即可，不需要 sshpass
-                    # 注意：不设置传输超时，让传输自然完成
+                    # 从跳转服务器传输到目标主机（回退路径）
+                    # 该路径依赖跳板机→节点免密，未免密时必然失败
                     # ServerAliveInterval 保持连接活跃，避免因空闲断开
                     scp_cmd = f"scp -o StrictHostKeyChecking=no -o ConnectTimeout=30 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 {jump_temp_path} {username}@{host}:{remote_path}"
                     logger.info(f"开始 SCP 传输: {jump_temp_path} -> {host}:{remote_path}")

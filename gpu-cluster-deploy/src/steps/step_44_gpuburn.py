@@ -83,29 +83,14 @@ class GPUBurnTest(BaseStep):
         return 0
 
     def _get_compile_hosts(self, hosts: List[str]) -> List[str]:
-        """根据编译策略确定编译节点"""
-        compile_strategy = "single_node"
-        compile_role = "test_compile"
-        if hasattr(self, 'versions') and self.versions and hasattr(self.versions, 'test_packages'):
-            compile_strategy = self.versions.test_packages.compile_strategy
-            compile_role = self.versions.test_packages.compile_role
+        """GPU Burn 编译节点：gpuburn_compile_strategy 优先于全局 compile_strategy
 
-        if compile_strategy == "local":
-            return hosts
-        elif compile_strategy == "single_node":
-            return [hosts[0]] if hosts else []
-        elif compile_strategy == "role_based":
-            compile_hosts = []
-            for host in hosts:
-                node = self._get_node_config(host)
-                if node and hasattr(node, 'roles') and compile_role in node.roles:
-                    compile_hosts.append(host)
-            if not compile_hosts and hosts:
-                self.logger.warning(f"没有节点具有 '{compile_role}' 角色，使用第一个节点编译")
-                compile_hosts = [hosts[0]]
-            return compile_hosts
-        else:
-            return [hosts[0]] if hosts else []
+        实际选择逻辑在 BaseStep._get_compile_hosts（与步骤 40/41/45 共用）。
+        """
+        override = None
+        if getattr(self, 'versions', None) and getattr(self.versions, 'test_packages', None):
+            override = self.versions.test_packages.gpuburn_compile_strategy
+        return super()._get_compile_hosts(hosts, strategy_override=override)
 
     def _upload_and_build_gpuburn(self, host: str, compute_cap: int, cuda_version: str) -> bool:
         """上传并编译GPU Burn"""

@@ -459,7 +459,8 @@ class NFSConfig(BaseStep):
 
         nfs_server = self.config.nfs_server_node
         if not nfs_server:
-            return True, "未配置NFS服务器"
+            # 配置缺失不能当作"已配置"跳过，否则部署会静默成功
+            return False, "未配置NFS服务器节点（检查nfs.server指向或nfs_server角色）"
 
         # 获取服务器IP
         server_ip = self._get_nfs_server_ip(nfs_server.hostname)

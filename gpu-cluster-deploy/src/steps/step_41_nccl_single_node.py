@@ -22,7 +22,9 @@ class NCCLSingleNodeTest(BaseStep):
     timeout = 1800  # 30分钟（包含编译时间）
 
     # 测试项目
-    TEST_ITEMS = ['all_reduce_perf', 'all_gather_perf', 'alltoall_perf']
+    # TEST_ITEMS = ['all_reduce_perf', 'all_gather_perf', 'alltoall_perf']
+    TEST_ITEMS = ['all_reduce_perf' ]
+
 
     def _get_test_config(self):
         """获取测试配置"""
@@ -57,44 +59,6 @@ class NCCLSingleNodeTest(BaseStep):
         if config:
             return config.log_dir
         return "/opt/gpu-test/logs"
-
-    def _get_compile_strategy(self) -> str:
-        """获取编译策略"""
-        config = self._get_test_config()
-        if config:
-            return config.compile_strategy
-        return "single_node"
-
-    def _get_compile_role(self) -> str:
-        """获取编译角色名称"""
-        config = self._get_test_config()
-        if config:
-            return config.compile_role
-        return "test_compile"
-
-    def _get_compile_hosts(self, hosts: List[str]) -> List[str]:
-        """根据编译策略确定哪些节点需要编译"""
-        strategy = self._get_compile_strategy()
-
-        if strategy == "local":
-            return hosts
-        elif strategy == "single_node":
-            return [hosts[0]] if hosts else []
-        elif strategy == "role_based":
-            # 根据节点role筛选编译节点
-            compile_role = self._get_compile_role()
-            compile_hosts = []
-            for host in hosts:
-                node = self._get_node_config(host)
-                if node and hasattr(node, 'roles') and compile_role in node.roles:
-                    compile_hosts.append(host)
-            # 如果没有节点有编译角色，使用第一个节点
-            if not compile_hosts and hosts:
-                self.logger.warning(f"没有节点具有 '{compile_role}' 角色，使用第一个节点编译")
-                compile_hosts = [hosts[0]]
-            return compile_hosts
-        else:
-            return [hosts[0]] if hosts else []
 
     def _get_nccl_test_size(self) -> str:
         """获取NCCL测试数据大小"""

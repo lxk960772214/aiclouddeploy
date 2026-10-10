@@ -6,6 +6,7 @@
 - 智能检测NVLink
 """
 
+import os
 from typing import List, Dict, Tuple
 from src.steps.base import BaseStep, StepResult, StepStatus
 from concurrent.futures import ThreadPoolExecutor, as_completed

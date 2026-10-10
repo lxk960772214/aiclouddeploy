@@ -173,20 +173,28 @@ class NVIDIADriver(BaseStep):
         # 卸载脚本
         uninstall_script = '''
 # 1. 停止GPU相关进程
-pkill -9 -f nvidia-persistenced || true
-pkill -9 -f fabricmanager || true
+# 禁止 pkill -f：脚本文本本身就是 bash -c 的命令行，脚本里任何位置
+# 出现过目标关键字（哪怕只是在 systemctl 行里），-f 模式都会匹配到
+# 执行脚本的 bash 自身并将其 SIGKILL，表现为 exit_code=-1 的秒退。
+# [n]xxx 方括号技巧只能防"模式匹配到自己"，防不了脚本其他行的同词。
+# 必须按 PID 杀并跳过自身 $$。
+for pid in $(pgrep -f nvidia-persistenced || true); do [ "$pid" != "$$" ] && kill -9 "$pid" 2>/dev/null || true; done
+for pid in $(pgrep -f fabricmanager || true); do [ "$pid" != "$$" ] && kill -9 "$pid" 2>/dev/null || true; done
 systemctl stop nvidia-persistenced || true
 systemctl stop nvidia-fabricmanager || true
 
 # 2. 卸载内核模块（按依赖顺序反向卸载）
+# rmmod 直接对内核中已加载的模块操作；modprobe -r 依赖 /lib/modules
+# 下的模块文件，文件已被清理时会对"明明 lsmod 还在的模块"报 not found
 for module in nvidia_uvm nvidia_drm nvidia_modeset nvidia_peermem nvidia_nvswitch nvidia; do
-    modprobe -r $module 2>/dev/null || true
+    rmmod $module 2>/dev/null || modprobe -r $module 2>/dev/null || true
 done
 
 # 3. 使用NVIDIA官方卸载工具
 test -f /usr/bin/nvidia-uninstall && /usr/bin/nvidia-uninstall -s || true
 
 # 4. 清理处于rc状态的nvidia相关包（避免依赖解析失败）
+apt-get remove --purge nvidia* -y 
 dpkg --purge $(dpkg -l | grep -E '^rc.*nvidia|^rc.*linux-modules-nvidia' | awk '{print $2}') 2>/dev/null || true
 
 # 5. 清理apt安装的NVIDIA包
@@ -219,8 +227,10 @@ lsmod | grep nvidia || echo "UNINSTALL_DONE"
         summary = self.execute_batch(hosts, uninstall_script, sudo=True)
 
         for host, result in summary.results.items():
-            # 如果没有nvidia模块或者输出包含UNINSTALL_DONE，认为成功
-            results[host] = "UNINSTALL_DONE" in result.stdout or "nvidia" not in result.stdout.lower()
+            # 脚本必然以 lsmod|grep nvidia || echo UNINSTALL_DONE 结尾，
+            # 没看到 UNINSTALL_DONE 就是脚本没跑完（如被 pkill 自杀、通道异常），
+            # 不能把空输出当作卸载成功
+            results[host] = result.success and "UNINSTALL_DONE" in result.stdout
             if results[host]:
                 self.logger.info(f"[{host}] NVIDIA驱动卸载完成")
             else:
@@ -232,7 +242,9 @@ lsmod | grep nvidia || echo "UNINSTALL_DONE"
         """批量安装依赖"""
         self.logger.info(f"[{self.step_id}] 批量安装依赖（{len(hosts)}个节点）...")
 
-        deps_cmd = "apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y build-essential dkms libvulkan1 mesa-vulkan-drivers vulkan-tools libglvnd-dev"
+        # deps_cmd = "apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y build-essential dkms libvulkan1 mesa-vulkan-drivers vulkan-tools libglvnd-dev"
+        deps_cmd = "echo 'skip'"
+        
         summary = self.execute_batch(hosts, deps_cmd, sudo=True)
 
         results = {host: result.success for host, result in summary.results.items()}
@@ -379,6 +391,17 @@ lsmod | grep nvidia || echo "UNINSTALL_DONE"
             time.sleep(2)  # 等待系统稳定
 
         if not hosts_to_install:
+            # hosts_to_install 为空有两种原因：全都版本匹配跳过（成功），
+            # 或者卸载失败被剔除（失败）。不能一律报成功
+            failed_after_uninstall = [h for h, r in results.items() if not r.get("success")]
+            if failed_after_uninstall:
+                return StepResult(
+                    step_id=self.step_id,
+                    step_name=self.step_name,
+                    status=StepStatus.FAILED,
+                    message=f"卸载旧版本失败，无法安装: {failed_after_uninstall}",
+                    host_results=results
+                )
             self.logger.info("所有节点都已安装正确版本，无需操作")
             return StepResult(
                 step_id=self.step_id,

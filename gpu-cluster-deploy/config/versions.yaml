@@ -1,20 +1,24 @@
 cuda:
-  version: "13.0"
+  version: "13.0.0"
   toolkit_file: "cuda_13.0.0_580.65.06_linux.run"
-  download_url: "https://developer.download.nvidia.com/compute/cuda/13.0.0/local_installers/cuda_13.0.0_580.65.06_linux.run"
+  # download_url: "https://developer.download.nvidia.com/compute/cuda/13.0.0/local_installers/cuda_13.0.0_580.65.06_linux.run"
+  local_file: "packages/cuda_13.0.0_580.65.06_linux.run"
+
 
 nvidia_driver:
-  version: "590.48.01"
-  file: "NVIDIA-Linux-x86_64-590.48.01.run"
-  local_file: "packages/NVIDIA-Linux-x86_64-590.48.01.run"
+  version: "580.95.05"
+  # file: "NVIDIA-Linux-x86_64-580.95.05.run"
+  # 驱动安装包必须是 .run 安装器；这里曾错填 fabricmanager 的 deb，
+  # 导致 chmod +x 后当 shell 脚本执行报 `!<arch>` 语法错误
+  local_file: "packages/NVIDIA-Linux-x86_64-580.95.05.run"
   # fabricmanager本地deb路径（相对项目根目录或绝对路径）。
   # 留空(null)则走在线下载；填了且文件存在则优先上传本地deb安装（避免在线下载失败）。
   # 注意: deb版本需与本机nvidia驱动版本匹配
-  fabricmanager_local_file: "packages/nvidia-fabricmanager_590.48.01-2ubuntu1_amd64.deb"
+  fabricmanager_local_file: "packages/nvidia-fabricmanager_580.95.05-1_amd64.deb"
 
 mlnx_ofed:
   version: "24.10-2.1.8.0"
-  file: "MLNX_OFED_LINUX-24.10-2.1.8.0-ubuntu22.04-x86_64.tgz"
+  # file: "MLNX_OFED_LINUX-24.10-2.1.8.0-ubuntu22.04-x86_64.tgz"
   enabled: true
   local_file: "packages/MLNX_OFED_LINUX-24.10-2.1.8.0-ubuntu22.04-x86_64.tar"  # 相对路径（基于项目根目录）
 
@@ -29,7 +33,7 @@ apt_mirror:
   mirror: "tuna"  # 镜像源: tuna(清华), aliyun(阿里), ustc(中科大), 或自定义URL
 
 nccl:
-  enabled: true
+  enabled: false
   install_method: "local_file"
   install_path: "/root/liuxk/nccl"
   compile_jobs: 8  # 编译并行进程数，null表示自动(nproc)，可设置为固定值如 8
@@ -51,23 +55,32 @@ test_packages:
   nccl_tests: "nccl-tests-master.zip"  # NCCL-tests测试工具包
   openmpi: "openmpi-4.1.8.tar.gz"  # 多机NCCL测试需要
 
+  #/root/para/ /data/para /share/para
+
   # 支持相对路径（基于项目根目录 gpu-cluster-deploy/），或绝对路径
-  build_dir: "/root/para/test_run/build"  # 本地编译目录
+  build_dir: "/data05/para/test_run/build"  # 本地编译目录
 
   # 工具目录：存放编译好的工具（可放在NFS共享目录供所有节点使用）
   # 支持相对路径（基于项目根目录 gpu-cluster-deploy/），或绝对路径
-  toolkit_dir: "/root/para/test_run/toolkit"  # 共享工具目录（可NFS）
+  toolkit_dir: "/data05/para/test_run/toolkit"  # 共享工具目录（可NFS）
 
   # 结果目录：测试结果存放位置
   # 支持相对路径（基于项目根目录 gpu-cluster-deploy/），或绝对路径
-  result_dir: "/root/para/test_run/result"  # 测试结果目录
+  result_dir: "/data05/para/test_run/result"  # 测试结果目录
 
   # 日志目录：编译日志存放位置
   # 支持相对路径（基于项目根目录 gpu-cluster-deploy/），或绝对路径
-  log_dir: "/root/para/test_run/logs"  # 编译日志目录
+  log_dir: "/data05/para/test_run/logs"  # 编译日志目录
 
   # GPU Burn测试配置
-  gpuburn_duration: 600  # 测试时长(秒)
+  gpuburn_duration: 10  # 测试时长(秒)
+
+  # GPU Burn专属编译策略（仅step 44生效，覆盖上面的全局compile_strategy）：
+  # - single_node: 仅第一个节点编译（toolkit_dir在NFS上时推荐，二进制全节点共享）
+  # - local: 每个节点独立编译（toolkit_dir不是NFS共享时用）
+  # - role_based: 按compile_role角色决定编译节点
+  # 不配置（或留空）则跟随全局compile_strategy
+  gpuburn_compile_strategy: "single_node"
 
   # NCCL测试配置
   nccl_test_size: "2G"  # 测试数据大小，B200/RTX5090建议2G
@@ -80,7 +93,7 @@ test_packages:
   # - local: 每个节点在本地build_dir独立编译（不推荐NFS环境）
   # - single_node: 只在第一个节点编译（默认）
   # - role_based: 根据 nodes.roles 中的 test_compile role 决定哪些节点编译
-  compile_strategy: "role_based"  # 推荐role_based，灵活控制编译节点
+  compile_strategy: "single_node"  # 推荐role_based，灵活控制编译节点
 
   # 编译角色名称（当compile_strategy=role_based时生效）
   # 节点需要在roles中添加此角色才会参与编译

@@ -1509,6 +1509,14 @@ execute() 增加 mode=keep + lock_version 的判断逻辑
 7、gpu 自动检查/usr/local/cuda目录是否存在，如果存在的话加载
 
 
+1、gpuburn压测过程中我想看看
+2、精确的汇总失败的项目
+3、添加fuser -k /dev/nvidia*
+4、如果节点已有密钥公钥，可能配置免密失败
+5、计算节点必须使用代理才能联网
+
+
+
 ## 许可证
 
 MIT License

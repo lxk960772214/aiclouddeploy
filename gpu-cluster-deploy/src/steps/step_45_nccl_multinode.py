@@ -61,14 +61,6 @@ class NCCLMultiNodeTest(BaseStep):
             return f"-j{config.compile_jobs}"
         return "-j$(nproc)"
 
-    def _get_compile_strategy(self) -> str:
-        config = self._get_test_config()
-        return config.compile_strategy if config else "single_node"
-
-    def _get_compile_role(self) -> str:
-        config = self._get_test_config()
-        return config.compile_role if config else "test_compile"
-
     def _get_package_path(self, config_key: str, default_filename: str) -> Optional[str]:
         """获取工具包的本地绝对路径
 
@@ -100,25 +92,6 @@ class NCCLMultiNodeTest(BaseStep):
             cap_str = cap_result.get("stdout", "").strip().replace(".", "")
             return int(cap_str) if cap_str.isdigit() else None
         return None
-
-    def _get_compile_hosts(self, hosts: List[str]) -> List[str]:
-        strategy = self._get_compile_strategy()
-        if strategy == "local":
-            return hosts
-        elif strategy == "single_node":
-            return [hosts[0]] if hosts else []
-        elif strategy == "role_based":
-            compile_role = self._get_compile_role()
-            compile_hosts = []
-            for host in hosts:
-                node = self._get_node_config(host)
-                if node and hasattr(node, 'roles') and compile_role in node.roles:
-                    compile_hosts.append(host)
-            if not compile_hosts and hosts:
-                self.logger.warning(f"没有节点具有 '{compile_role}' 角色，使用第一个节点编译")
-                compile_hosts = [hosts[0]]
-            return compile_hosts
-        return [hosts[0]] if hosts else []
 
     def _get_cuda_home(self, host: str) -> str:
         """获取CUDA安装路径，优先使用/usr/local/cuda符号链接，若无效则查找cuda-版本目录"""
@@ -793,7 +766,7 @@ class NCCLMultiNodeTest(BaseStep):
         nccl_tests_bin = f"{toolkit_dir}/nccl-tests-mpi/build/{test_item}"
 
         # LD_LIBRARY_PATH
-        cuda_home = self._get_cuda_home(hosts[0] if hosts else "")
+        cuda_home = self._get_cuda_home(first_host)
         ld_path = f"{toolkit_dir}/openmpi/lib:{toolkit_dir}/nccl/lib:{cuda_home}/lib64"
 
         # 构建-x参数

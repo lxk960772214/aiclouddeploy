@@ -38,3 +38,4 @@ gpu-cluster-deploy.tar
 info.txt
 cluster-*.yaml
 gpu-cluster-deploy/packages/
+.venv

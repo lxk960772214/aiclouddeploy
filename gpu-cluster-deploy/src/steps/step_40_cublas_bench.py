@@ -58,42 +58,6 @@ class CUBLASBenchmark(BaseStep):
             return config.result_dir
         return "/opt/gpu-test/result"
 
-    def _get_compile_strategy(self) -> str:
-        """获取编译策略"""
-        config = self._get_test_config()
-        if config:
-            return config.compile_strategy
-        return "single_node"
-
-    def _get_compile_role(self) -> str:
-        """获取编译角色名称"""
-        config = self._get_test_config()
-        if config:
-            return config.compile_role
-        return "test_compile"
-
-    def _get_compile_hosts(self, hosts: List[str]) -> List[str]:
-        """根据编译策略确定哪些节点需要编译"""
-        strategy = self._get_compile_strategy()
-
-        if strategy == "local":
-            return hosts
-        elif strategy == "single_node":
-            return [hosts[0]] if hosts else []
-        elif strategy == "role_based":
-            compile_role = self._get_compile_role()
-            compile_hosts = []
-            for host in hosts:
-                node = self._get_node_config(host)
-                if node and hasattr(node, 'roles') and compile_role in node.roles:
-                    compile_hosts.append(host)
-            if not compile_hosts and hosts:
-                self.logger.warning(f"没有节点具有 '{compile_role}' 角色，使用第一个节点上传")
-                compile_hosts = [hosts[0]]
-            return compile_hosts
-        else:
-            return [hosts[0]] if hosts else []
-
     def is_configured(self, host: str) -> tuple:
         """检查测试工具是否存在"""
         toolkit_dir = self._get_toolkit_dir()

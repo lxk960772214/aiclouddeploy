@@ -129,6 +129,7 @@ class TestPackagesConfig:
     result_dir: str = "/opt/gpu-test/result"  # 测试结果目录
     log_dir: str = "/opt/gpu-test/logs"  # 编译日志目录
     gpuburn_duration: int = 600  # GPU Burn测试时长(秒)
+    gpuburn_compile_strategy: Optional[str] = None  # GPU Burn专属编译策略，None=跟随全局compile_strategy
     nccl_test_size: str = "8G"  # NCCL测试数据大小
     compile_jobs: Optional[int] = None  # 编译并行进程数，None表示自动(nproc)
     compile_strategy: str = "single_node"  # 编译策略: local, single_node, role_based
@@ -407,6 +408,14 @@ class ConfigLoader:
             retry=deployment_raw.get("retry", 0),
             continue_on_failure=deployment_raw.get("continue_on_failure", False)
         )
+
+        # nfs.server 显式指定的节点补充 nfs_server 角色
+        # nfs_server_node/client_nodes 按角色查找，仅写 nfs.server 不加角色时
+        # step_34 会因找不到服务器而跳过配置
+        if nfs and nfs.server:
+            for node in all_nodes:
+                if node.hostname == nfs.server and "nfs_server" not in node.roles:
+                    node.roles.append("nfs_server")
 
         return ClusterConfig(
             name=cluster_raw.get("name", "gpu-cluster"),
@@ -785,6 +794,7 @@ class ConfigLoader:
             result_dir=test_raw.get("result_dir", "/opt/gpu-test/result"),
             log_dir=test_raw.get("log_dir", "/opt/gpu-test/logs"),
             gpuburn_duration=test_raw.get("gpuburn_duration", 600),
+            gpuburn_compile_strategy=test_raw.get("gpuburn_compile_strategy"),
             nccl_test_size=test_raw.get("nccl_test_size", "8G"),
             compile_jobs=test_raw.get("compile_jobs", None),
             compile_strategy=test_raw.get("compile_strategy", "single_node"),

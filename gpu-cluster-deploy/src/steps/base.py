@@ -511,6 +511,48 @@ class BaseStep(ABC):
                 return node
         return None
 
+    def _get_compile_strategy(self, strategy_override: Optional[str] = None) -> str:
+        """获取编译策略（测试类步骤 40/41/44/45 共用）
+
+        strategy_override 为步骤专属覆盖值（如 step 44 的 gpuburn_compile_strategy），
+        非空时优先于全局 compile_strategy。取值：
+        local=每节点本地编译；single_node=仅第一个节点；role_based=按角色。
+        """
+        if strategy_override:
+            return strategy_override
+        if getattr(self, 'versions', None) and getattr(self.versions, 'test_packages', None):
+            return self.versions.test_packages.compile_strategy
+        return "single_node"
+
+    def _get_compile_hosts(self, hosts: List[str], strategy_override: Optional[str] = None) -> List[str]:
+        """统一编译节点选择逻辑（测试类步骤 40/41/44/45 共用）
+
+        - local: 全部节点各自编译（toolkit_dir 非 NFS 共享时用）
+        - single_node: 仅第一个节点编译
+        - role_based: 所有带 compile_role 角色的节点都编译；
+          注意是"全部"而不是"第一台"，一个都没有时回退第一个节点
+        """
+        strategy = self._get_compile_strategy(strategy_override)
+        compile_role = "test_compile"
+        if getattr(self, 'versions', None) and getattr(self.versions, 'test_packages', None):
+            compile_role = self.versions.test_packages.compile_role
+
+        if strategy == "local":
+            return list(hosts)
+        elif strategy == "single_node":
+            return [hosts[0]] if hosts else []
+        elif strategy == "role_based":
+            compile_hosts = []
+            for host in hosts:
+                node = self._get_node_config(host)
+                if node and hasattr(node, 'roles') and compile_role in node.roles:
+                    compile_hosts.append(host)
+            if not compile_hosts and hosts:
+                self.logger.warning(f"没有节点具有 '{compile_role}' 角色，使用第一个节点编译")
+                compile_hosts = [hosts[0]]
+            return compile_hosts
+        return [hosts[0]] if hosts else []
+
     def _get_login_user(self, host: str) -> str:
         """获取登录用户（必须指定）"""
         node = self._get_node_config(host)
@@ -631,11 +673,15 @@ class BaseStep(ABC):
                     if not username:
                         username = self._get_deploy_user(host) or "root"
 
+                # 密码必须显式传下去：copy_file_to_host 内部走的是
+                # 与命令执行相同的隧道连接，不传密码时新连接会退回
+                # 跳板机默认认证，未免密的节点会认证失败
                 success = self.ssh_manager.copy_file_to_host(
                     local_path=local_path,
                     remote_path=remote_path,
                     host=host,
                     username=username,
+                    password=self._get_login_password(host),
                     timeout=None  # 传输不设超时，让传输自然完成
                 )
                 results[host] = success

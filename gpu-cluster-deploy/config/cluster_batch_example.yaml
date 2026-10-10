@@ -60,6 +60,17 @@ node_batch:
     mount_point: "/ssd"
     filesystem: "ext4"
     format_disk: true        # 是否格式化磁盘（默认false，设为true会格式化）
+  storage_template:
+    type: raid10
+    devices:
+      - /dev/nvme0n1
+      - /dev/nvme1n1
+      - /dev/nvme2n1
+      - /dev/nvme3n1
+    mount_point: /ssd
+    filesystem: xfs
+    format_disk: true
+
 
   # 认证配置模板（可选）
   auth_template:
@@ -115,6 +126,61 @@ nodes:
       mount_point: "/ssd"
       filesystem: "ext4"
       format_disk: false     # 不格式化（已有数据）
+
+
+
+
+
+
+# nodes:
+  # - hostname: "wqd10nbh06c6"
+  #   ip: "10.243.128.6"
+  #   username: "root"
+  #   # password: "To.syhmARxhyIEiL"
+  #   private_key: "~/.ssh/id_rsa"  # 或使用密钥
+  #   roles:
+  #     - nfs_server
+  #     - cpu_node
+
+  # - hostname: "g0599"
+  #   ip: "10.254.46.181"
+  #   username: "root"
+  #   # password: "ubuntu@2026"
+  #   private_key: "~/.ssh/id_rsa"  # 或使用密钥
+  #   roles:
+  #     - gpu_node          # 只运行测试，不参与编译
+  #     - test_compile           # 添加额外角色
+  #   storage:
+  #     type: "single"           # single | raid1 | raid10
+  #     devices:
+  #       - "/dev/nvme0n1"
+  #     mount_point: "/data"
+  #     filesystem: "ext4"       # ext4 | xfs
+  #     format_disk: false       # ⚠️ 高危：是否格式化磁盘（默认false）
+
+  # - hostname: "g0787"
+  #   ip: "10.254.43.3"
+  #   username: "root"
+  #   # password: "ubuntu@2026"
+  #   private_key: "~/.ssh/id_rsa"  # 或使用密钥
+  #   roles:
+  #     - nfs_server
+
+  # - hostname: "m2cl1207"
+  #   ip: "10.254.46.183"
+  #   username: "root"
+  #   private_key: "~/.ssh/id_rsa"  # 或使用密钥
+  #   roles:
+  #     - cpu_node        
+
+  # - hostname: "g0583"
+  #   ip: "10.254.46.182"
+  #   username: "root"
+  #   private_key: "~/.ssh/id_rsa"  # 或使用密钥
+  #   roles:
+  #     - gpu_node 
+
+
 
 # 网络配置增强
 network:
